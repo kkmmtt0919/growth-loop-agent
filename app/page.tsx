@@ -18,8 +18,8 @@ import {
   Home as HomeIcon,
   LayoutDashboard,
   ListChecks,
+  LogOut,
   MessageCircle,
-  MoreHorizontal,
   Pause,
   Play,
   Plus,
@@ -69,6 +69,7 @@ type PomodoroMode = "focus" | "break";
 const LOG_STORAGE_KEY = "growth-loop.logs.v2";
 const SESSION_STORAGE_KEY = "growth-loop.agent-session.v1";
 const REVIEW_STORAGE_KEY = "growth-loop.review-enabled.v1";
+const AUTH_TOKEN_KEY = "growth-loop.auth-token";
 const LOG_EVENT = "growth-loop:logs";
 const EMPTY_LOGS: LogEntry[] = [];
 const POMODORO_FOCUS_SECONDS = 25 * 60;
@@ -76,6 +77,53 @@ const POMODORO_BREAK_SECONDS = 5 * 60;
 const EVENING_REVIEW_HOUR = 21;
 const EVENING_REVIEW_MINUTE = 30;
 let logSnapshot: { raw: string; value: LogEntry[] } = { raw: "", value: EMPTY_LOGS };
+
+/**
+ * 数据库模式：把服务端工作台数据就地写回 demoSeed 对象。
+ * demoSeed 是模块级常量对象，所有子组件引用同一引用，自动看到新数据，
+ * 无需给每个子组件传 props。切回原型模式时刷新页面即可恢复 seed。
+ */
+function applyWorkspaceData(data: typeof demoSeed) {
+  demoSeed.seedVersion = data.seedVersion ?? demoSeed.seedVersion;
+  demoSeed.user = data.user;
+  demoSeed.goals = data.goals;
+  demoSeed.tasks = data.tasks;
+  demoSeed.learningLogs = data.learningLogs;
+  demoSeed.ledger = data.ledger;
+  demoSeed.weeklyBars = data.weeklyBars;
+  demoSeed.insight = data.insight;
+  demoSeed.quote = data.quote;
+}
+
+type AuthMode = "loading" | "demo" | "login" | "ready";
+
+/** 数据库记录 -> 前端 LogEntry（保存后即时回显用） */
+function recordToLogEntry(record: {
+  id: string;
+  text: string;
+  topic: string;
+  kind?: LogEntry["kind"];
+  minutes?: number;
+  output?: string;
+  intent: LogEntry["intent"];
+  xp: number;
+  coin: number;
+  mode: LogEntry["mode"];
+}): LogEntry {
+  return {
+    id: record.id,
+    text: record.text,
+    topic: record.topic || "学习记录",
+    kind: record.kind,
+    minutes: record.minutes,
+    output: record.output,
+    intent: record.intent,
+    xp: record.xp,
+    coin: record.coin,
+    createdAt: "刚刚",
+    mode: record.mode,
+  };
+}
 
 function readStoredLogs() {
   if (typeof window === "undefined") return EMPTY_LOGS;
@@ -151,6 +199,10 @@ export default function Home() {
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reviewTimer = useRef<number | null>(null);
   const sessionIdRef = useRef("anonymous");
+  const [authMode, setAuthMode] = useState<AuthMode>("loading");
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState("");
 
   useEffect(() => {
     const storedSessionId = window.localStorage.getItem(SESSION_STORAGE_KEY) || `session-${Date.now()}`;
@@ -161,6 +213,44 @@ export default function Home() {
       if (storedReviewPreference !== null) setReviewEnabled(storedReviewPreference === "true");
     }, 0);
     return () => window.clearTimeout(reviewTimer);
+  }, []);
+
+  // 启动探测数据模式：
+  //   /api/demo 返回 seeded-demo -> 数据库未配置，原型模式
+  //   /api/demo 返回 401         -> 已配置但未登录，显示登录页
+  //   /api/demo 返回 database    -> 已配置且 token 有效，进入工作台
+  useEffect(() => {
+    let cancelled = false;
+    const token = typeof window !== "undefined" ? window.localStorage.getItem(AUTH_TOKEN_KEY) : null;
+    (async () => {
+      try {
+        const headers: Record<string, string> = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
+        const res = await fetch("/api/demo", { headers });
+        if (res.status === 401) {
+          if (!cancelled) setAuthMode("login");
+          return;
+        }
+        if (!res.ok) throw new Error("demo unavailable");
+        const payload = (await res.json()) as { mode?: string; data?: typeof demoSeed };
+        if (payload.mode === "seeded-demo") {
+          if (!cancelled) setAuthMode("demo");
+        } else if (payload.mode === "database" && payload.data) {
+          applyWorkspaceData(payload.data);
+          setTasks(payload.data.tasks as Task[]);
+          window.localStorage.removeItem(LOG_STORAGE_KEY);
+          if (token) setAuthToken(token);
+          if (!cancelled) setAuthMode("ready");
+        } else {
+          throw new Error("unknown demo mode");
+        }
+      } catch {
+        if (!cancelled) setAuthMode("demo"); // 网络异常/未配置：回退原型模式
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -221,7 +311,51 @@ export default function Home() {
   }
 
   function commitLogs(nextLogs: LogEntry[]) {
+    if (authMode === "ready") {
+      // 数据库模式：数据已入库，只更新内存快照用于即时回显
+      logSnapshot = { raw: "", value: nextLogs };
+      window.dispatchEvent(new Event(LOG_EVENT));
+      return;
+    }
     writeStoredLogs(nextLogs);
+  }
+
+  async function submitAuth(credentials: { email: string; password: string; displayName?: string }, isRegister: boolean) {
+    setAuthBusy(true);
+    setAuthError("");
+    try {
+      const res = await fetch(isRegister ? "/api/auth/register" : "/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(credentials),
+      });
+      const payload = (await res.json()) as { token?: string; error?: string };
+      if (!res.ok || !payload.token) {
+        setAuthError(payload.error || "登录失败，请重试");
+        return;
+      }
+      window.localStorage.setItem(AUTH_TOKEN_KEY, payload.token);
+      setAuthToken(payload.token);
+      const dataRes = await fetch("/api/demo", { headers: { Authorization: `Bearer ${payload.token}` } });
+      if (!dataRes.ok) throw new Error("load workspace failed");
+      const dataPayload = (await dataRes.json()) as { mode?: string; data?: typeof demoSeed };
+      if (dataPayload.mode === "database" && dataPayload.data) {
+        applyWorkspaceData(dataPayload.data);
+        setTasks(dataPayload.data.tasks as Task[]);
+        window.localStorage.removeItem(LOG_STORAGE_KEY);
+      }
+      setAuthMode("ready");
+      notify(isRegister ? "账号已创建，欢迎加入" : "欢迎回来");
+    } catch {
+      setAuthError("网络异常，请稍后重试");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  function logout() {
+    window.localStorage.removeItem(AUTH_TOKEN_KEY);
+    window.location.reload();
   }
 
   function togglePomodoro() {
@@ -256,6 +390,24 @@ export default function Home() {
   }, [doneCount, tasks.length]);
 
   function toggleTask(id: string) {
+    if (authMode === "ready") {
+      const target = tasks.find((task) => task.id === id);
+      const done = target?.status !== "done";
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (authToken) headers.Authorization = `Bearer ${authToken}`;
+      fetch("/api/tasks", {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ taskId: id, done }),
+      })
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error("tasks unavailable"))))
+        .then(({ task }: { task: Task }) => {
+          setTasks((current) => current.map((t) => (t.id === task.id ? { ...t, status: task.status } : t)));
+          notify(done ? `+${task.xp} XP · +${task.coin} 积分，行动已记下` : "已把这次行动放回今日计划");
+        })
+        .catch(() => notify("任务更新失败，请重试"));
+      return;
+    }
     setTasks((current) =>
       current.map((task) => {
         if (task.id !== id) return task;
@@ -277,10 +429,12 @@ export default function Home() {
     setQuizError("");
     setQuizGrade(null);
     try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (authMode === "ready" && authToken) headers.Authorization = `Bearer ${authToken}`;
       const response = await fetch("/api/quiz", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "generate", content, topic, output }),
+        headers,
+        body: JSON.stringify({ action: "generate", content, topic, output, recordId: sourceLogId }),
       });
       if (!response.ok) throw new Error("quiz unavailable");
       const quiz = (await response.json()) as QuizSession;
@@ -301,9 +455,11 @@ export default function Home() {
     setQuizBusy(true);
     setQuizError("");
     try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (authMode === "ready" && authToken) headers.Authorization = `Bearer ${authToken}`;
       const response = await fetch("/api/quiz", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           action: "grade",
           quizId: activeQuiz.quizId,
@@ -316,7 +472,8 @@ export default function Home() {
       if (!response.ok) throw new Error("grade unavailable");
       const result = (await response.json()) as QuizGrade;
       setQuizGrade(result);
-      if (quizSourceLogId) {
+      // 数据库模式：bonus XP 已在服务端幂等发放，这里只记录分数不重复加
+      if (quizSourceLogId && authMode !== "ready") {
         const bonus = result.score >= 85 ? 10 : result.score >= 60 ? 6 : 3;
         commitLogs(readStoredLogs().map((log) => {
           if (log.id !== quizSourceLogId) return log;
@@ -367,28 +524,44 @@ export default function Home() {
     notify("已保存，晚报时统一回顾");
 
     try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (authMode === "ready" && authToken) headers.Authorization = `Bearer ${authToken}`;
       const response = await fetch("/api/agent", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ message, conversationId: sessionIdRef.current, context: reviewContext }),
       });
       if (!response.ok) throw new Error("agent unavailable");
-      const result = (await response.json()) as { intent?: LogEntry["intent"]; mode?: "llm" | "demo"; extracted?: { kind?: TaskKind; topic?: string; minutes?: number; output?: string }; reply?: string };
+      const result = (await response.json()) as {
+        intent?: LogEntry["intent"];
+        mode?: "llm" | "demo";
+        extracted?: { kind?: TaskKind; topic?: string; minutes?: number; output?: string };
+        reply?: string;
+        record?: Parameters<typeof recordToLogEntry>[0] | null;
+      };
       setAssistantReply(result.reply || "已记下。今晚我会根据今天的记录统一追问，帮助你把经历变成明天可用的经验。" );
-      const resolvedOutput = result.extracted?.output || undefined;
-      commitLogs(readStoredLogs().map((log) => log.id === id ? {
-        ...log,
-        kind: result.extracted?.kind,
-        topic: result.extracted?.topic || message || "学习记录",
-        minutes: result.extracted?.minutes,
-        output: resolvedOutput,
-        intent: result.intent || "quick_log",
-        mode: result.mode || "demo",
-      } : log));
+
+      if (authMode === "ready") {
+        // 数据库模式：记录已持久化，用服务端 record 即时回显
+        commitLogs(result.record ? [recordToLogEntry(result.record), ...readStoredLogs()] : readStoredLogs());
+      } else {
+        const resolvedOutput = result.extracted?.output || undefined;
+        commitLogs(readStoredLogs().map((log) => log.id === id ? {
+          ...log,
+          kind: result.extracted?.kind,
+          topic: result.extracted?.topic || message || "学习记录",
+          minutes: result.extracted?.minutes,
+          output: resolvedOutput,
+          intent: result.intent || "quick_log",
+          mode: result.mode || "demo",
+        } : log));
+      }
     } catch {
-      commitLogs(readStoredLogs().map((log) => log.id === id ? { ...log, topic: message || "学习记录", mode: "demo" } : log));
-      setAssistantReply("我已经先把这条记录保存在本机。今晚的晚报会继续根据今天的记录提问。" );
-      notify("已保存到本机，Agent 整理稍后可重试");
+      if (authMode !== "ready") {
+        commitLogs(readStoredLogs().map((log) => log.id === id ? { ...log, topic: message || "学习记录", mode: "demo" } : log));
+      }
+      setAssistantReply(authMode === "ready" ? "这条记录没能保存到云端，稍后重试。" : "我已经先把这条记录保存在本机。今晚的晚报会继续根据今天的记录提问。" );
+      notify(authMode === "ready" ? "保存失败，请重试" : "已保存到本机，Agent 整理稍后可重试");
     } finally {
       setIsAgentBusy(false);
     }
@@ -438,6 +611,14 @@ export default function Home() {
       },
     ]);
     notify(`已把「${goal.title}」拆成一个明天可执行的行动`);
+  }
+
+  if (authMode === "loading") {
+    return <div className="auth-loading">正在载入…</div>;
+  }
+
+  if (authMode === "login") {
+    return <AuthScreen busy={authBusy} error={authError} onSubmit={submitAuth} />;
   }
 
   if (isMobileExperience) {
@@ -501,7 +682,7 @@ export default function Home() {
           <div className="profile-chip">
             <div className="avatar">{demoSeed.user.displayName.slice(0, 1)}</div>
             <div className="profile-meta"><strong>{demoSeed.user.displayName}</strong><span>Lv. {String(demoSeed.user.level).padStart(2, "0")} · {demoSeed.user.role}</span></div>
-            <MoreHorizontal size={16} className="muted-icon" />
+            {authMode === "ready" && <button className="profile-logout" onClick={logout} aria-label="退出登录" title="退出登录"><LogOut size={15} /></button>}
           </div>
         </div>
       </aside>
@@ -738,4 +919,48 @@ function GrowthPanel({ onBackToToday }: { onBackToToday: () => void }) {
     <div className="growth-layout"><section className="panel growth-chart-panel"><div className="panel-heading"><div><span className="eyebrow">RHYTHM TREND</span><h2>近 7 天投入节奏</h2></div><span className="trend-chip"><ArrowUpRight size={13} /> +18% vs 上周</span></div><div className="growth-chart">{weeklyBars.map((bar, index) => <div className="growth-bar-column" key={bar.day}><span className="growth-bar-value">{bar.label}</span><div className="growth-bar-track"><span className={index === 3 ? "highlight" : ""} style={{ height: `${bar.value}%` }} /></div><span>{bar.day}</span></div>)}</div><div className="chart-caption"><span><i className="legend-dot" /> 有效专注时长</span><strong>基线：5h 34m</strong></div></section><section className="panel evidence-panel"><div className="panel-heading"><div><span className="eyebrow">EVIDENCE MIX</span><h2>进步由什么组成</h2></div><BarChart3 size={18} className="panel-icon" /></div><div className="evidence-row"><div className="evidence-label"><span>行动记录</span><strong>1 条</strong></div><div className="evidence-track"><span style={{ width: "34%" }} /></div></div><div className="evidence-row"><div className="evidence-label"><span>理解回应</span><strong>{understandingCount} 条</strong></div><div className="evidence-track"><span className="evidence-green" style={{ width: "67%" }} /></div></div><div className="evidence-row"><div className="evidence-label"><span>实际应用</span><strong>{applicationCount} 条</strong></div><div className="evidence-track"><span className="evidence-gold" style={{ width: "42%" }} /></div><p className="evidence-note"><Sparkles size={13} /> 下一步：给英语练习补一次延迟回忆。</p></div></section></div>
     <section className="panel goal-progress-panel"><div className="panel-heading"><div><span className="eyebrow">GOAL PROGRESS</span><h2>目标的真实进度</h2></div><span className="count-badge">只比较自己的基线</span></div><div className="growth-goal-list">{demoSeed.goals.map((goal) => <div className="growth-goal" key={goal.id}><div className="growth-goal-heading"><div><strong>{goal.title}</strong><span>{goal.description}</span></div><em>{goal.progress}%</em></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="growth-goal-footer"><span>{goal.horizon}</span><span>{goal.status}</span></div></div>)}</div></section>
   </div>;
+}
+
+function AuthScreen({ busy, error, onSubmit }: {
+  busy: boolean;
+  error: string;
+  onSubmit: (credentials: { email: string; password: string; displayName?: string }, isRegister: boolean) => Promise<void>;
+}) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  return (
+    <div className="auth-screen">
+      <div className="auth-card">
+        <div className="auth-brand"><div className="brand-mark"><Sparkles size={17} /></div><strong>成长回路</strong></div>
+        <h1>{mode === "login" ? "欢迎回来" : "创建账号"}</h1>
+        <p className="auth-sub">{mode === "login"
+          ? "登录后，你的记录、任务和成长账本都会保存在自己的空间里。"
+          : "注册一个邮箱账号，保存属于你的成长回路。密码至少 8 位。"}</p>
+        {mode === "register" && (
+          <div className="auth-field">
+            <label>昵称（可选）</label>
+            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="怎么称呼你" />
+          </div>
+        )}
+        <div className="auth-field">
+          <label>邮箱</label>
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" />
+        </div>
+        <div className="auth-field">
+          <label>密码</label>
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={mode === "register" ? "至少 8 位" : "你的密码"} autoComplete={mode === "register" ? "new-password" : "current-password"} />
+        </div>
+        {error && <p className="auth-error" role="alert">{error}</p>}
+        <button className="auth-submit" disabled={busy || !email.trim() || !password} onClick={() => onSubmit({ email, password, displayName }, mode === "register")}>
+          {busy ? "请稍候…" : mode === "login" ? "登录" : "注册并开始"}
+        </button>
+        <button className="auth-switch" disabled={busy} onClick={() => setMode((m) => (m === "login" ? "register" : "login"))}>
+          {mode === "login" ? "没有账号？创建一个" : "已有账号？去登录"}
+        </button>
+        <p className="auth-hint">MVP 阶段使用邮箱/密码登录。微信登录会在闭环验证通过后接入。</p>
+      </div>
+    </div>
+  );
 }

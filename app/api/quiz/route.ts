@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import { generateLearningQuiz, gradeLearningQuiz, type GeneratedQuiz, type QuizQuestion } from "@/lib/agent/quiz";
+import { authenticate, AuthError } from "@/lib/auth/middleware";
+import { createQuizSession, gradeQuizSession } from "@/lib/repo/quiz";
+import { rewardQuiz } from "@/lib/service/workspace";
+import { ServiceError } from "@/lib/service/errors";
+import { isDatabaseConfigured } from "@/lib/repo/pool";
 
 export const runtime = "nodejs";
 
@@ -68,6 +73,31 @@ export async function POST(request: Request) {
       const topic = stringField(input, "topic");
       const output = stringField(input, "output");
       const quiz = await generateLearningQuiz(content, topic, output);
+
+      // 数据库模式：测验会话入库（关联来源记录），返回数据库 quizId
+      if (isDatabaseConfigured) {
+        const { userId } = await authenticate(request);
+        const recordId = typeof input.recordId === "string" && input.recordId.trim()
+          ? input.recordId.trim()
+          : null;
+        const session = await createQuizSession({
+          userId,
+          recordId,
+          topic: quiz.topic,
+          sourceSummary: quiz.sourceSummary,
+          questions: quiz.questions,
+          mode: quiz.mode,
+        });
+        return NextResponse.json({
+          quizId: session.id,
+          topic: session.topic,
+          sourceSummary: session.source_summary,
+          questions: quiz.questions,
+          mode: quiz.mode,
+          provider: quiz.provider,
+        }, { headers: { "Cache-Control": "no-store" } });
+      }
+
       return NextResponse.json({
         quizId: quiz.quizId,
         topic: quiz.topic,
@@ -89,8 +119,28 @@ export async function POST(request: Request) {
     }
     const quiz = reconstructQuiz({ quizId: input.quizId, topic, source }, questions);
     const result = await gradeLearningQuiz(quiz, answers);
+
+    // 数据库模式：回写评分 + 发放测验 bonus（幂等，key 关联 quizId）
+    if (isDatabaseConfigured) {
+      const { userId } = await authenticate(request);
+      const quizId = typeof input.quizId === "string" ? input.quizId.trim() : null;
+      if (quizId) {
+        const updated = await gradeQuizSession(userId, quizId, {
+          answers,
+          score: result.score,
+          level: result.level,
+          gradedBy: result.gradedBy === "llm" ? "llm" : "rules",
+        });
+        if (updated) {
+          await rewardQuiz(userId, updated.id, updated.topic, result.score);
+        }
+      }
+    }
+
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
+    if (error instanceof AuthError) return errorResponse(error.message, error.status);
+    if (error instanceof ServiceError) return errorResponse(error.message, error.status);
     return errorResponse(error instanceof Error ? error.message : "invalid quiz request");
   }
 }
