@@ -1,4 +1,4 @@
-import { demoSeed } from "@/lib/demo-data";
+import { demoSeed, todayShanghaiDateLabel, todayShanghaiWeekdayLabel } from "@/lib/demo-data";
 import type { DbProfile, DbRecord, DbTask, SeedBundle } from "@/lib/repo/types";
 
 /**
@@ -56,8 +56,8 @@ export function mapProfileToSeedUser(profile: DbProfile): typeof demoSeed.user {
     focusScore: 76,
     xpBalance: profile.xp_balance,
     coinBalance: profile.coin_balance,
-    dateLabel: demoSeed.user.dateLabel,
-    weekdayLabel: demoSeed.user.weekdayLabel,
+    dateLabel: todayShanghaiDateLabel(),
+    weekdayLabel: todayShanghaiWeekdayLabel(),
   };
 }
 

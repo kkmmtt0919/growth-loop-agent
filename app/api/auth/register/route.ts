@@ -29,11 +29,14 @@ export async function POST(request: Request) {
       password: input.password,
       displayName: typeof input.displayName === "string" ? input.displayName : undefined,
     });
-    // 首登播种：把 demo 目标/任务/记录/账本写入新用户空间（失败不阻塞注册）
-    try {
-      await seedForUser(result.profile.id);
-    } catch (error) {
-      console.error("[api/auth/register] seed failed", error);
+    // 首登播种：仅开发/演示环境（ENABLE_DEMO_SEED !== "false" 时默认开启）；
+    // 生产置 false 后新用户为空数据，走 onboarding 引导（失败不阻塞注册）
+    if (process.env.ENABLE_DEMO_SEED !== "false") {
+      try {
+        await seedForUser(result.profile.id);
+      } catch (error) {
+        console.error("[api/auth/register] seed failed", error);
+      }
     }
     return NextResponse.json({ token: result.token, profile: toPublicProfile(result.profile) });
   } catch (error) {

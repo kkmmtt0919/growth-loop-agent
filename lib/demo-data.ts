@@ -1,3 +1,27 @@
+/**
+ * 按上海时区返回今天的中文日期标签（如 "2026 年 8 月 22 日"）。
+ * 前后端共用：服务端 profile 映射与前端顶部日期戳都从这里取真实时间，
+ * 不再使用写死的 demo 日期。
+ */
+export function todayShanghaiDateLabel(): string {
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  }).formatToParts(new Date());
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")} 年 ${get("month")} 月 ${get("day")} 日`;
+}
+
+/** 按上海时区返回今天的中文星期标签（如 "星期六"）。 */
+export function todayShanghaiWeekdayLabel(): string {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    weekday: "long",
+  }).format(new Date());
+}
+
 export type TaskKind = "focus" | "learn" | "exercise" | "life" | "rest";
 
 export type Task = {

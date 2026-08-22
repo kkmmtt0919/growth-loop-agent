@@ -25,7 +25,7 @@ import {
   Trophy,
   X,
 } from "lucide-react";
-import { demoSeed, type Goal, type Task, type TaskKind, weeklyBars } from "@/lib/demo-data";
+import { demoSeed, todayShanghaiDateLabel, todayShanghaiWeekdayLabel, type Goal, type Task, type TaskKind, weeklyBars } from "@/lib/demo-data";
 
 export type MobileTab = "今日" | "计划" | "记录" | "成长";
 
@@ -216,7 +216,7 @@ function MobileTodayV4({
   return (
     <div className="app-mobile-v4-home" data-mobile-home="v4">
       <section className="app-mobile-v4-meta" aria-label="今日状态">
-        <div className="app-mobile-v4-date"><span className="app-mobile-v4-mini-mark"><Sparkles size={12} /></span><strong>今天</strong><span>{demoSeed.user.weekdayLabel} · {demoSeed.user.dateLabel}</span></div>
+        <div className="app-mobile-v4-date"><span className="app-mobile-v4-mini-mark"><Sparkles size={12} /></span><strong>今天</strong><span>{todayShanghaiWeekdayLabel()} · {todayShanghaiDateLabel()}</span></div>
         <span className="app-mobile-v4-streak"><Flame size={13} /> 连续 {demoSeed.user.streak} 天</span>
       </section>
 

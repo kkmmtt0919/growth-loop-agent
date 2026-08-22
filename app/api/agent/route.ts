@@ -43,6 +43,10 @@ export async function POST(request: Request) {
     return errorResponse("output must be a string");
   }
 
+  if (input.minutes !== undefined && (typeof input.minutes !== "number" || input.minutes < 0 || input.minutes > 1440)) {
+    return errorResponse("minutes must be a number between 0 and 1440");
+  }
+
   if (input.context !== undefined && typeof input.context !== "string") {
     return errorResponse("context must be a string");
   }
@@ -72,6 +76,9 @@ export async function POST(request: Request) {
     });
 
     // 数据库模式：记录持久化 + 幂等入账；失败不阻塞回复（persisted:false，前端可回退）
+    // 时长/产出优先级：用户显式填写 > Agent 文本提取 > 默认（0 / null）
+    const explicitMinutes = typeof input.minutes === "number" ? input.minutes : undefined;
+    const explicitOutput = typeof input.output === "string" && input.output.trim() ? input.output.trim() : undefined;
     let record: unknown = null;
     if (userId) {
       try {
@@ -79,8 +86,8 @@ export async function POST(request: Request) {
           text: message,
           topic: result.extracted?.topic || message.slice(0, 60) || "学习记录",
           kind: result.extracted?.kind,
-          minutes: result.extracted?.minutes,
-          output: result.extracted?.output,
+          minutes: explicitMinutes ?? result.extracted?.minutes ?? 0,
+          output: explicitOutput ?? result.extracted?.output ?? null,
           intent: result.intent,
           mode: result.mode,
         });

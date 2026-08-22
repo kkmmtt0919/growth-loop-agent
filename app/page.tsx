@@ -32,7 +32,7 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
-import { demoSeed, initialTasks, type Goal, type Task, type TaskKind, weeklyBars } from "@/lib/demo-data";
+import { demoSeed, initialTasks, todayShanghaiDateLabel, todayShanghaiWeekdayLabel, type Goal, type Task, type TaskKind } from "@/lib/demo-data";
 import type { QuizGrade, QuizQuestion } from "@/lib/agent/quiz";
 import MobileAppShell, { type MobileTab } from "./mobile-shell";
 
@@ -184,6 +184,8 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("今日");
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [input, setInput] = useState("");
+  const [recordMinutes, setRecordMinutes] = useState("");
+  const [recordOutput, setRecordOutput] = useState("");
   const logs = useSyncExternalStore(subscribeToLogs, readStoredLogs, () => EMPTY_LOGS);
   const [isFocusRunning, setIsFocusRunning] = useState(false);
   const [pomodoroMode, setPomodoroMode] = useState<PomodoroMode>("focus");
@@ -212,6 +214,9 @@ export default function Home() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [evening, setEvening] = useState<EveningCardState>({ state: "loading" });
+  const [dashboardStats, setDashboardStats] = useState<{ profile?: { streak?: number; nickname?: string; level?: number; xp?: number; nextLevelXp?: number; coin?: number }; todayTasks?: Task[]; todayRecords?: number } | null>(null);
+  const [growthStats, setGrowthStats] = useState<{ weeklyMinutes?: Array<{ day: string; value: number; label: string }>; evidence?: { input: number; understanding: number; application: number }; activeDays?: number } | null>(null);
+  const [focusGoals, setFocusGoals] = useState<Goal[] | null>(null);
 
   useEffect(() => {
     const storedSessionId = window.localStorage.getItem(SESSION_STORAGE_KEY) || `session-${Date.now()}`;
@@ -295,6 +300,31 @@ export default function Home() {
         }
       } catch {
         if (!cancelled) setEvening({ state: "error" });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authMode, authToken]);
+
+  // 聚合数据（真实化）：ready 后拉取 dashboard / growth / goals，供侧边栏/成长页/计划页使用
+  useEffect(() => {
+    if (authMode !== "ready" || !authToken) return;
+    let cancelled = false;
+    const headers = { Authorization: `Bearer ${authToken}` };
+    (async () => {
+      try {
+        const [d, g, s] = await Promise.all([
+          fetch("/api/dashboard", { headers }).then((r) => r.json()),
+          fetch("/api/growth/stats", { headers }).then((r) => r.json()),
+          fetch("/api/goals/summary", { headers }).then((r) => r.json()),
+        ]);
+        if (cancelled) return;
+        if (d?.profile) setDashboardStats(d);
+        if (g?.weeklyMinutes) setGrowthStats(g);
+        if (s?.focusGoals) setFocusGoals(s.focusGoals);
+      } catch {
+        // 聚合失败不阻塞页面：各面板保持默认/空态
       }
     })();
     return () => {
@@ -432,11 +462,17 @@ export default function Home() {
   const doneCount = tasks.filter((task) => task.status === "done").length;
   const earnedCoins = tasks.filter((task) => task.status === "done").reduce((total, task) => total + task.coin, 0) + logs.reduce((total, log) => total + log.coin, 0);
 
+  // 等级/升级进度：权威来源 xp_balance（ledger 单向派生），不落库重复维护
+  const currentLevel = Math.floor(demoSeed.user.xpBalance / 100) + 1;
+  const nextLevelXp = 100 - (demoSeed.user.xpBalance % 100);
+  const levelProgress = demoSeed.user.xpBalance % 100;
+  const displayName = demoSeed.user.displayName || "朋友";
+
   const greeting = useMemo(() => {
     if (doneCount === tasks.length) return "今天的回路已经闭合";
     if (doneCount > 0) return "很好，今天已经开始转起来了";
-    return "早上好，周予安";
-  }, [doneCount, tasks.length]);
+    return `早上好，${displayName}`;
+  }, [doneCount, tasks.length, displayName]);
 
   function toggleTask(id: string) {
     if (authMode === "ready") {
@@ -568,6 +604,10 @@ export default function Home() {
     };
     commitLogs([optimisticLog, ...readStoredLogs()]);
     setInput("");
+    const minutesInput = recordMinutes ? Number(recordMinutes) : undefined;
+    const outputInput = recordOutput.trim() || undefined;
+    setRecordMinutes("");
+    setRecordOutput("");
     setIsAgentBusy(true);
     setAssistantReply("已记下。白天先不用停下来答题，今晚的晚报会把今天的记录合在一起，再统一追问。" );
     notify("已保存，晚报时统一回顾");
@@ -578,7 +618,13 @@ export default function Home() {
       const response = await fetch("/api/agent", {
         method: "POST",
         headers,
-        body: JSON.stringify({ message, conversationId: sessionIdRef.current, context: reviewContext }),
+        body: JSON.stringify({
+          message,
+          conversationId: sessionIdRef.current,
+          context: reviewContext,
+          minutes: minutesInput,
+          output: outputInput,
+        }),
       });
       if (!response.ok) throw new Error("agent unavailable");
       const result = (await response.json()) as {
@@ -720,7 +766,7 @@ export default function Home() {
         <div className="mini-streak">
           <div className="mini-streak-icon"><Flame size={17} /></div>
           <div>
-            <strong>{demoSeed.user.streak} 天</strong>
+            <strong>{dashboardStats?.profile?.streak ?? demoSeed.user.streak} 天</strong>
             <span>连续有效行动</span>
           </div>
           <ChevronRight size={15} className="muted-icon" />
@@ -730,7 +776,7 @@ export default function Home() {
           <button className="help-link" onClick={() => notify("小贴士：把下一步缩小到 10 分钟，先留下事实，晚报时再补充结果。")}><CircleHelp size={16} /> 使用小贴士</button>
           <div className="profile-chip">
             <div className="avatar">{demoSeed.user.displayName.slice(0, 1)}</div>
-            <div className="profile-meta"><strong>{demoSeed.user.displayName}</strong><span>Lv. {String(demoSeed.user.level).padStart(2, "0")} · {demoSeed.user.role}</span></div>
+            <div className="profile-meta"><strong>{demoSeed.user.displayName}</strong><span>Lv. {String(currentLevel).padStart(2, "0")} · {demoSeed.user.role}</span></div>
             {authMode === "ready" && <button className="profile-logout" onClick={logout} aria-label="退出登录" title="退出登录"><LogOut size={15} /></button>}
           </div>
         </div>
@@ -739,7 +785,7 @@ export default function Home() {
       <section className="main-column">
         <header className="topbar">
           <div className="mobile-brand"><div className="brand-mark"><Sparkles size={15} /></div><span>成长回路</span></div>
-          <div className="date-stamp">{demoSeed.user.dateLabel} <span>·</span> {demoSeed.user.weekdayLabel}</div>
+          <div className="date-stamp">{todayShanghaiDateLabel()} <span>·</span> {todayShanghaiWeekdayLabel()}</div>
           <div className="topbar-actions"><span className="ai-online-pill"><span /> AI 在线</span><button className="icon-button" aria-label="打开消息" onClick={() => notify(reviewEnabled ? "下一次 AI 晚间回顾：今天 21:30" : "晚间回顾目前已关闭") }><MessageCircle size={18} /></button><div className="avatar avatar-small">{demoSeed.user.displayName.slice(0, 1)}</div></div>
         </header>
 
@@ -760,6 +806,10 @@ export default function Home() {
               doneCount={doneCount}
               input={input}
               setInput={setInput}
+              recordMinutes={recordMinutes}
+              setRecordMinutes={setRecordMinutes}
+              recordOutput={recordOutput}
+              setRecordOutput={setRecordOutput}
               quickLogRef={quickLogRef}
               onSubmit={submitLog}
               onToggleTask={toggleTask}
@@ -775,20 +825,20 @@ export default function Home() {
               pomodoro={<PomodoroWidget mode={pomodoroMode} seconds={pomodoroSeconds} isRunning={isPomodoroRunning} onToggle={togglePomodoro} onReset={resetPomodoro} onModeChange={changePomodoroMode} />}
             />
           ) : activeTab === "计划" ? (
-            <PlanPanel tasks={tasks} onToggleTask={toggleTask} onSplitGoal={splitGoal} onBackToToday={() => setActiveTab("今日")} />
+            <PlanPanel tasks={tasks} focusGoals={focusGoals} onToggleTask={toggleTask} onSplitGoal={splitGoal} onBackToToday={() => setActiveTab("今日")} />
           ) : activeTab === "记录" ? (
-            <RecordsPanel logs={logs} input={input} setInput={setInput} inputRef={quickLogRef} onSubmit={submitLog} onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)} onBackToToday={() => setActiveTab("今日")} />
+            <RecordsPanel logs={logs} input={input} setInput={setInput} recordMinutes={recordMinutes} setRecordMinutes={setRecordMinutes} recordOutput={recordOutput} setRecordOutput={setRecordOutput} inputRef={quickLogRef} onSubmit={submitLog} onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)} onBackToToday={() => setActiveTab("今日")} />
           ) : (
-            <GrowthPanel onBackToToday={() => setActiveTab("今日")} />
+            <GrowthPanel growthStats={growthStats} onBackToToday={() => setActiveTab("今日")} />
           )}
         </div>
         <div className="mobile-nav">{tabs.map(({ label, icon: Icon }) => <button key={label} className={activeTab === label ? "active" : ""} onClick={() => setActiveTab(label)} aria-current={activeTab === label ? "page" : undefined}><Icon size={18} /><span>{label}</span></button>)}</div>
       </section>
 
       <aside className="right-rail">
-        <div className="rail-card level-card"><div className="level-orbit"><div className="level-number">{String(demoSeed.user.level).padStart(2, "0")}</div><div className="level-label">LV.</div></div><div><span className="card-kicker">CURRENT LEVEL</span><h3>{demoSeed.user.role}</h3><p>距离 Lv.{String(demoSeed.user.level + 1).padStart(2, "0")} 还差 <strong>84 XP</strong></p></div><div className="level-progress"><span style={{ width: "68%" }} /></div></div>
+        <div className="rail-card level-card"><div className="level-orbit"><div className="level-number">{String(currentLevel).padStart(2, "0")}</div><div className="level-label">LV.</div></div><div><span className="card-kicker">CURRENT LEVEL</span><h3>{demoSeed.user.role}</h3><p>距离 Lv.{String(currentLevel + 1).padStart(2, "0")} 还差 <strong>{nextLevelXp} XP</strong></p></div><div className="level-progress"><span style={{ width: `${levelProgress}%` }} /></div></div>
         <div className="rail-card next-card"><div className="card-kicker">NEXT BEST ACTION</div><h3>{isFocusRunning ? "专注正在进行" : "先做 10 分钟"}</h3><p>{isFocusRunning ? "不用想着完成整件事，只要继续这一小段。" : "把主任务拆成一个最容易开始的动作，今天的回路会从这里转起来。"}</p><button className={`focus-button ${isFocusRunning ? "running" : ""}`} onClick={toggleFocusSession}>{isFocusRunning ? <><Pause size={15} /> 暂停专注</> : <><Play size={15} fill="currentColor" /> 开始专注</>}</button></div>
-        <div className="rail-card wallet-card"><div className="wallet-header"><div className="wallet-icon"><WalletCards size={17} /></div><span>成长积分</span><button className="icon-button subtle" aria-label="积分详情" onClick={() => notify(`当前余额 ${demoSeed.user.coinBalance + earnedCoins} COIN，完成行动可继续增加`)}><ChevronRight size={16} /></button></div><div className="wallet-balance">{demoSeed.user.coinBalance + earnedCoins}<span> COIN</span></div><div className="wallet-meta"><span>本周 +{earnedCoins + 42}</span><button className="text-button" onClick={() => notify("兑换入口会在绑定你的现实奖励后开放")}>去兑换 <ChevronRight size={14} /></button></div></div>
+        <div className="rail-card wallet-card"><div className="wallet-header"><div className="wallet-icon"><WalletCards size={17} /></div><span>成长积分</span><button className="icon-button subtle" aria-label="积分详情" onClick={() => notify(`当前余额 ${demoSeed.user.coinBalance + earnedCoins} COIN，完成行动可继续增加`)}><ChevronRight size={16} /></button></div><div className="wallet-balance">{demoSeed.user.coinBalance + earnedCoins}<span> COIN</span></div><div className="wallet-meta"><span>本周 +{earnedCoins}</span><button className="text-button" onClick={() => notify("兑换入口会在绑定你的现实奖励后开放")}>去兑换 <ChevronRight size={14} /></button></div></div>
         <div className="rail-card quote-card"><div className="quote-mark">“</div><p>{demoSeed.quote}</p><span>— 今日回路</span></div>
       </aside>
 
@@ -817,6 +867,10 @@ type TodayHomeProps = {
   doneCount: number;
   input: string;
   setInput: React.Dispatch<React.SetStateAction<string>>;
+  recordMinutes: string;
+  setRecordMinutes: React.Dispatch<React.SetStateAction<string>>;
+  recordOutput: string;
+  setRecordOutput: React.Dispatch<React.SetStateAction<string>>;
   quickLogRef: React.RefObject<HTMLTextAreaElement | null>;
   onSubmit: () => void;
   onToggleTask: (id: string) => void;
@@ -832,7 +886,7 @@ type TodayHomeProps = {
   pomodoro: React.ReactNode;
 };
 
-function TodayHome({ greeting, tasks, doneCount, input, setInput, quickLogRef, onSubmit, onToggleTask, onOpenPlan, assistantReply, isAgentBusy, reviewEnabled, onToggleReview, onStartReview, evening, pomodoroVisible, onTogglePomodoro, pomodoro }: TodayHomeProps) {
+function TodayHome({ greeting, tasks, doneCount, input, setInput, recordMinutes, setRecordMinutes, recordOutput, setRecordOutput, quickLogRef, onSubmit, onToggleTask, onOpenPlan, assistantReply, isAgentBusy, reviewEnabled, onToggleReview, onStartReview, evening, pomodoroVisible, onTogglePomodoro, pomodoro }: TodayHomeProps) {
   const visibleTasks = tasks.slice(0, 4);
   return <div className="home-command-center">
     <section className="home-intro">
@@ -852,6 +906,10 @@ function TodayHome({ greeting, tasks, doneCount, input, setInput, quickLogRef, o
       </div>
       <div className="ai-composer">
         <textarea ref={quickLogRef} value={input} onChange={(event) => setInput(event.target.value)} placeholder="例如：今天看了 Agent 的工具调用，终于理解了它和普通聊天的区别……" rows={4} aria-label="今天发生了什么" />
+        <div className="ai-record-fields">
+          <input type="number" min={0} max={1440} value={recordMinutes} onChange={(event) => setRecordMinutes(event.target.value)} placeholder="时长（分钟，可选）" aria-label="记录时长（分钟）" />
+          <input value={recordOutput} onChange={(event) => setRecordOutput(event.target.value)} placeholder="产出 / 结果（可选）" aria-label="记录产出" />
+        </div>
         <div className="ai-composer-footer"><span>随手写就好，不用先整理格式 · {input.length}/480 · 晚间统一回顾</span><button className="ai-send-button" onClick={onSubmit} disabled={!input.trim() || isAgentBusy}><span>{isAgentBusy ? "AI 正在整理" : "保存记录"}</span><ArrowUpRight size={16} /></button></div>
       </div>
       <div className="ai-suggestion-row"><span>可以直接说：</span><button onClick={() => setInput("今天学了什么：")}>今天学了什么</button><button onClick={() => setInput("今天卡在哪里：")}>今天卡在哪里</button><button onClick={() => setInput("今晚回顾：")}>今晚回顾</button></div>
@@ -919,7 +977,7 @@ function WorkspaceHeader({ eyebrow, title, description, onBackToToday }: { eyebr
   return <div className="workspace-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><button className="quiet-button" onClick={onBackToToday}><LayoutDashboard size={15} /> 回到今日</button></div>;
 }
 
-function PlanPanel({ tasks, onToggleTask, onSplitGoal, onBackToToday }: { tasks: Task[]; onToggleTask: (id: string) => void; onSplitGoal: (goal: Goal) => void; onBackToToday: () => void }) {
+function PlanPanel({ tasks, focusGoals, onToggleTask, onSplitGoal, onBackToToday }: { tasks: Task[]; focusGoals: Goal[] | null; onToggleTask: (id: string) => void; onSplitGoal: (goal: Goal) => void; onBackToToday: () => void }) {
   const completed = tasks.filter((task) => task.status === "done").length;
   return <div className="workspace-page">
     <WorkspaceHeader eyebrow="PLAN BOARD" title="计划地图" description="先看目标，再看今天要落地的那一步。" onBackToToday={onBackToToday} />
@@ -929,7 +987,7 @@ function PlanPanel({ tasks, onToggleTask, onSplitGoal, onBackToToday }: { tasks:
      <section className="panel agent-roadmap-panel"><div className="panel-heading"><div><span className="eyebrow">AI AGENT TRACK</span><h2>学习 Agent，并开发自己的 Agent</h2></div><Sparkles size={18} className="panel-icon" /></div><p className="panel-desc">这条路线把“学 AI”收敛成一个可以持续交付的小项目：先理解组成，再做最小闭环，最后用测验和真实任务验证。</p><div className="roadmap-stages"><div className="roadmap-stage"><span className="roadmap-number">01</span><div><strong>理解 Agent</strong><p>LLM、Prompt、工具调用、状态/记忆和评估。</p></div></div><div className="roadmap-stage"><span className="roadmap-number">02</span><div><strong>做最小闭环</strong><p>信息 → 决策 → 工具 → 结果，先解决一个具体问题。</p></div></div><div className="roadmap-stage"><span className="roadmap-number">03</span><div><strong>验证与迭代</strong><p>留下可验证证据，用理解题、日志和用户反馈校准。</p></div></div></div><div className="roadmap-action"><div><span>今日建议 · 45 分钟</span><strong>定义你的 Agent 问题与验收标准</strong></div><button className="primary-button" onClick={() => onSplitGoal({ id: "goal-ai-agent", title: "学习 Agent 并开发自己的 Agent", description: "从一个具体问题做出最小可运行闭环", progress: 0, horizon: "今日路线", status: "进行中" })}>加入今日计划 <ArrowUpRight size={15} /></button></div></section>
     <div className="plan-layout">
       <section className="panel schedule-panel"><div className="panel-heading"><div><span className="eyebrow">TODAY TIMELINE</span><h2>今日时间轴</h2></div><span className="count-badge">{completed}/{tasks.length} 已完成</span></div><p className="panel-desc">把任务放进现实的时间里，完成感会更具体。</p><div className="schedule-list">{tasks.map((task) => <div className={`schedule-card ${task.status === "done" ? "is-done" : task.status === "current" ? "is-current" : ""}`} key={task.id}><div className="schedule-time"><strong>{task.time}</strong><span>{task.duration}</span></div><div className={`schedule-icon kind-${task.kind}`}>{renderTaskKindIcon(task.kind, 16)}</div><div className="schedule-copy"><div className="task-title-line"><h3>{task.title}</h3><span className={`schedule-kind kind-${task.kind}`}>{taskKindLabel(task.kind)}</span>{task.status === "current" && <span className="now-pill">NOW</span>}</div><p>{task.subtitle}</p><span className="schedule-reward">+{task.xp} XP · +{task.coin} coin</span></div><button className={`task-check ${task.status === "done" ? "checked" : ""}`} onClick={() => onToggleTask(task.id)} aria-label={`${task.status === "done" ? "撤销" : "完成"}：${task.title}`}>{task.status === "done" ? <Check size={15} strokeWidth={3} /> : <span />}</button></div>)}</div></section>
-     <aside className="panel weekly-plan-panel"><div className="panel-heading"><div><span className="eyebrow">WEEKLY INTENT</span><h2>本周只做三件事</h2></div><ListChecks size={18} className="panel-icon" /></div><div className="intent-list"><div className="intent-item"><span className="intent-number">01</span><div><strong>完成首页第一版</strong><p>今天推进 45 分钟，周三前可演示。</p></div></div><div className="intent-item"><span className="intent-number">02</span><div><strong>英语听力保持表达</strong><p>不追求时长，每次留下 3 个表达。</p></div></div><div className="intent-item"><span className="intent-number">03</span><div><strong>周日做一次复盘</strong><p>比较行动证据，不比较情绪。</p></div></div></div><div className="plan-note"><Sparkles size={15} /><span>建议：今天完成主任务后，不再新增新的计划。</span></div></aside>
+     <aside className="panel weekly-plan-panel"><div className="panel-heading"><div><span className="eyebrow">WEEKLY INTENT</span><h2>本周重点</h2></div><ListChecks size={18} className="panel-icon" /></div><div className="intent-list">{focusGoals && focusGoals.length > 0 ? focusGoals.map((goal, index) => <div className="intent-item" key={goal.id}><span className="intent-number">0{index + 1}</span><div><strong>{goal.title}</strong><p>{goal.description}</p></div></div>) : <div className="intent-item"><span className="intent-number">—</span><div><strong>还没有进行中的目标</strong><p>在计划里创建一个 4-12 周目标，本周重点会从这里出现。</p></div></div>}</div><div className="plan-note"><Sparkles size={15} /><span>建议：今天完成主任务后，不再新增新的计划。</span></div></aside>
     </div>
   </div>;
 }
@@ -940,7 +998,7 @@ function evidenceLabel(evidence: "输入" | "输入 + 输出" | "应用") {
   return "行动记录";
 }
 
-function RecordsPanel({ logs, input, setInput, inputRef, onSubmit, onGenerateQuiz, onBackToToday }: { logs: LogEntry[]; input: string; setInput: React.Dispatch<React.SetStateAction<string>>; inputRef: React.RefObject<HTMLTextAreaElement | null>; onSubmit: () => void; onGenerateQuiz: (log: LogEntry) => void; onBackToToday: () => void }) {
+function RecordsPanel({ logs, input, setInput, recordMinutes, setRecordMinutes, recordOutput, setRecordOutput, inputRef, onSubmit, onGenerateQuiz, onBackToToday }: { logs: LogEntry[]; input: string; setInput: React.Dispatch<React.SetStateAction<string>>; recordMinutes: string; setRecordMinutes: React.Dispatch<React.SetStateAction<string>>; recordOutput: string; setRecordOutput: React.Dispatch<React.SetStateAction<string>>; inputRef: React.RefObject<HTMLTextAreaElement | null>; onSubmit: () => void; onGenerateQuiz: (log: LogEntry) => void; onBackToToday: () => void }) {
   const totalXp = demoSeed.learningLogs.reduce((total, log) => total + log.xp, 0) + logs.reduce((total, log) => total + log.xp, 0);
   return <div className="workspace-page">
     <WorkspaceHeader eyebrow="EVIDENCE LOG" title="成长记录" description="把今天发生的事放在同一条可回看的时间线上，晚报时再统一回顾。" onBackToToday={onBackToToday} />
@@ -949,7 +1007,7 @@ function RecordsPanel({ logs, input, setInput, inputRef, onSubmit, onGenerateQui
         {logs.map((log) => <article className="record-item record-item-live" key={log.id}><div className="record-date"><strong>{log.createdAt}</strong><span>新增</span></div><div className="record-marker"><span /></div><div className="record-body"><div className="record-topline"><h3>{log.topic}</h3><span className="record-reward">+{log.xp} XP · +{log.coin} coin</span></div><p>{log.text}</p><div className="record-tags">{log.kind && <span className={`record-kind-tag kind-${log.kind}`}>{taskKindLabel(log.kind)}</span>}<span>{log.intent === "plan_today" ? "计划" : log.intent === "review" ? "复盘" : log.output ? "已整理" : "已记录"}</span><span>{log.output ? `AI 摘要：${log.output}` : log.mode === "pending" ? "AI 正在整理" : "等待晚报回顾"}</span>{typeof log.quizScore === "number" && <span>理解 {log.quizScore} 分</span>}</div>{log.output && <button className="record-quiz-button" onClick={() => onGenerateQuiz(log)}>再测一次 <ChevronRight size={13} /></button>}</div></article>)}
         {demoSeed.learningLogs.map((log) => <article className="record-item" key={log.id}><div className="record-date"><strong>{log.occurredAt.split(" ")[0]}</strong><span>{log.occurredAt.split(" ").slice(1).join(" ")}</span></div><div className="record-marker"><span /></div><div className="record-body"><div className="record-topline"><h3>{log.topic}</h3><span className="record-reward">+{log.xp} XP · +{log.coin} coin</span></div><p>{log.summary}</p><div className="record-tags"><span>{evidenceLabel(log.evidence)}</span><span>{log.duration}</span></div></div></article>)}
       </div></section>
-      <aside className="records-side"><section className="panel quick-record-panel"><div className="panel-heading"><div><span className="eyebrow">QUICK NOTE</span><h2>随手记一笔</h2></div><BookOpen size={18} className="panel-icon" /></div><p className="panel-desc">记录任何今天发生的事，不用先分类或整理。晚报时 AI 会把几条记录合在一起统一提问。</p><div className="input-label">今天发生了什么？ <span>学习、运动、生活、休息都可以</span></div><div className="log-input-wrap"><textarea ref={inputRef} value={input} onChange={(event) => setInput(event.target.value)} placeholder="例如：读了行动设计的一节内容，下午走了 20 分钟……" rows={6} /></div><div className="input-actions"><span>{input.length}/480</span><button className="send-button" onClick={onSubmit} disabled={!input.trim()}>保存记录 <ArrowUpRight size={15} /></button></div><div className="record-total"><span>本组已获得</span><strong>{totalXp} XP</strong></div></section><section className="panel ledger-panel"><div className="panel-heading"><div><span className="eyebrow">LEDGER</span><h2>最近结算</h2></div><ReceiptText size={18} className="panel-icon" /></div><div className="ledger-list">{demoSeed.ledger.map((entry) => <div className="ledger-item" key={entry.id}><div className={`ledger-icon ${entry.account === "XP" ? "ledger-xp" : "ledger-coin"}`}>{entry.account === "XP" ? <Sparkles size={14} /> : <WalletCards size={14} />}</div><div><strong>{entry.reason}</strong><span>{entry.occurredAt}</span></div><em>+{entry.amount} {entry.account}</em></div>)}</div></section></aside>
+      <aside className="records-side"><section className="panel quick-record-panel"><div className="panel-heading"><div><span className="eyebrow">QUICK NOTE</span><h2>随手记一笔</h2></div><BookOpen size={18} className="panel-icon" /></div><p className="panel-desc">记录任何今天发生的事，不用先分类或整理。晚报时 AI 会把几条记录合在一起统一提问。</p><div className="input-label">今天发生了什么？ <span>学习、运动、生活、休息都可以</span></div><div className="log-input-wrap"><textarea ref={inputRef} value={input} onChange={(event) => setInput(event.target.value)} placeholder="例如：读了行动设计的一节内容，下午走了 20 分钟……" rows={6} /></div><div className="ai-record-fields"><input type="number" min={0} max={1440} value={recordMinutes} onChange={(event) => setRecordMinutes(event.target.value)} placeholder="时长（分钟，可选）" aria-label="记录时长（分钟）" /><input value={recordOutput} onChange={(event) => setRecordOutput(event.target.value)} placeholder="产出 / 结果（可选）" aria-label="记录产出" /></div><div className="input-actions"><span>{input.length}/480</span><button className="send-button" onClick={onSubmit} disabled={!input.trim()}>保存记录 <ArrowUpRight size={15} /></button></div><div className="record-total"><span>本组已获得</span><strong>{totalXp} XP</strong></div></section><section className="panel ledger-panel"><div className="panel-heading"><div><span className="eyebrow">LEDGER</span><h2>最近结算</h2></div><ReceiptText size={18} className="panel-icon" /></div><div className="ledger-list">{demoSeed.ledger.map((entry) => <div className="ledger-item" key={entry.id}><div className={`ledger-icon ${entry.account === "XP" ? "ledger-xp" : "ledger-coin"}`}>{entry.account === "XP" ? <Sparkles size={14} /> : <WalletCards size={14} />}</div><div><strong>{entry.reason}</strong><span>{entry.occurredAt}</span></div><em>+{entry.amount} {entry.account}</em></div>)}</div></section></aside>
     </div>
   </div>;
 }
@@ -970,14 +1028,37 @@ function LearningQuizCard({ quiz, answers, grade, busy, error, onAnswer, onGrade
   return <section className="quiz-panel"><div className="quiz-panel-header"><div><span className="eyebrow">RECALL CHECK · {quiz.mode === "llm" ? "LLM 出题" : "演示出题"}</span><h2>理解「{quiz.topic}」</h2><p>先别查资料，直接回答，并尽量给一个例子。LLM 会按概念、迁移和表达结构评分。</p></div><div className="quiz-status"><Brain size={18} /><span>{answeredCount}/{quiz.questions.length} 已回答</span></div></div><div className="quiz-source"><span>学习底稿</span><p>{quiz.sourceSummary}</p></div><div className="quiz-question-list">{quiz.questions.map((question, index) => <div className="quiz-question" key={question.id}><div className="quiz-question-top"><span>0{index + 1}</span><strong>{question.prompt}</strong></div><p className="quiz-hint">提示：{question.hint}</p><textarea value={answers[question.id] || ""} onChange={(event) => onAnswer(question.id, event.target.value)} placeholder="写下你的理解，至少给一个具体例子……" rows={3} disabled={Boolean(grade)} /></div>)}</div>{error && <p className="quiz-error" role="alert">{error}</p>}{grade ? <div className="quiz-result"><div className="quiz-result-score"><strong>{grade.score}</strong><span>分</span><em>{grade.level}</em></div><div className="quiz-result-copy"><p>{grade.summary}</p><span>{grade.nextHabit}</span></div></div> : <button className="primary-button quiz-submit" onClick={onGrade} disabled={busy || answeredCount === 0}>{busy ? "LLM 正在评分…" : `提交答案并评分 · ${answeredCount}/${quiz.questions.length}` } <ArrowUpRight size={15} /></button>}{grade && <div className="quiz-feedback-list">{grade.feedback.map((item) => <div className="quiz-feedback" key={item.questionId}><div><strong>第 {quiz.questions.findIndex((question) => question.id === item.questionId) + 1} 题 · {item.score} 分</strong><p>{item.comment}</p></div><span>{item.modelAnswer}</span></div>)}</div>}{grade && <div className="quiz-graded-by"><span>{grade.gradedBy === "llm" ? "LLM 已完成逐题评分" : `LLM 暂时不可用，已使用${grade.provider === "rules" ? "规则" : grade.provider}估分`}</span><button className="quiet-button" onClick={onReset}><RotateCcw size={14} /> 再做一次</button></div>}</section>;
 }
 
-function GrowthPanel({ onBackToToday }: { onBackToToday: () => void }) {
-  const totalMinutes = demoSeed.weeklyBars.reduce((total, bar) => total + Number.parseInt(bar.label, 10), 0);
-  const applicationCount = demoSeed.learningLogs.filter((log) => log.evidence === "应用").length;
-  const understandingCount = demoSeed.learningLogs.filter((log) => log.evidence === "输入 + 输出").length;
+type GrowthStats = { weeklyMinutes?: Array<{ day: string; value: number; label: string }>; evidence?: { input: number; understanding: number; application: number }; activeDays?: number } | null;
+
+function GrowthPanel({ growthStats, onBackToToday }: { growthStats: GrowthStats; onBackToToday: () => void }) {
+  const weekly = growthStats?.weeklyMinutes ?? [];
+  const totalMinutes = weekly.reduce((sum, bar) => sum + bar.value, 0);
+  const applicationCount = growthStats?.evidence?.application ?? 0;
+  const understandingCount = growthStats?.evidence?.understanding ?? 0;
+  const inputCount = growthStats?.evidence?.input ?? 0;
+  const streak = growthStats?.activeDays ?? 0;
+  const xpBalance = demoSeed.user.xpBalance;
+  const currentLevel = Math.floor(xpBalance / 100) + 1;
+  const nextLevelXp = 100 - (xpBalance % 100);
+  const hasData = totalMinutes > 0 || inputCount > 0 || understandingCount > 0 || applicationCount > 0 || streak > 0;
+  const evidenceTotal = Math.max(1, inputCount + understandingCount + applicationCount);
+
+  if (!hasData) {
+    return <div className="workspace-page">
+      <WorkspaceHeader eyebrow="GROWTH DASHBOARD" title="成长仪表盘" description="不把自己压缩成一个分数，只看节奏、证据和下一轮实验。" onBackToToday={onBackToToday} />
+      <div className="panel growth-empty-panel">
+        <div className="growth-empty-icon"><Sparkles size={22} /></div>
+        <h3>还没有成长数据</h3>
+        <p>写下今天的第一条行动记录，这里就会出现你的节奏、投入和证据。</p>
+        <button className="primary-button" onClick={onBackToToday}>去记录第一条 <ArrowUpRight size={15} /></button>
+      </div>
+    </div>;
+  }
+
   return <div className="workspace-page">
     <WorkspaceHeader eyebrow="GROWTH DASHBOARD" title="成长仪表盘" description="不把自己压缩成一个分数，只看节奏、证据和下一轮实验。" onBackToToday={onBackToToday} />
-    <div className="growth-metrics"><article className="metric-card metric-coral"><span className="metric-label">有效行动日</span><strong>{demoSeed.user.streak}<small> 天</small></strong><p>连续节奏，比昨天多 1 天</p></article><article className="metric-card metric-navy"><span className="metric-label">本周投入</span><strong>{Math.floor(totalMinutes / 60)}<small>h</small> {totalMinutes % 60}<small>m</small></strong><p>7 天累计专注时长</p></article><article className="metric-card metric-sage"><span className="metric-label">掌握证据</span><strong>{applicationCount + understandingCount}<small> 条</small></strong><p>记录之后形成了理解</p></article><article className="metric-card metric-paper"><span className="metric-label">成长等级</span><strong>Lv.{String(demoSeed.user.level).padStart(2, "0")}</strong><p>{demoSeed.user.role} · 距离升级 84 XP</p></article></div>
-    <div className="growth-layout"><section className="panel growth-chart-panel"><div className="panel-heading"><div><span className="eyebrow">RHYTHM TREND</span><h2>近 7 天投入节奏</h2></div><span className="trend-chip"><ArrowUpRight size={13} /> +18% vs 上周</span></div><div className="growth-chart">{weeklyBars.map((bar, index) => <div className="growth-bar-column" key={bar.day}><span className="growth-bar-value">{bar.label}</span><div className="growth-bar-track"><span className={index === 3 ? "highlight" : ""} style={{ height: `${bar.value}%` }} /></div><span>{bar.day}</span></div>)}</div><div className="chart-caption"><span><i className="legend-dot" /> 有效专注时长</span><strong>基线：5h 34m</strong></div></section><section className="panel evidence-panel"><div className="panel-heading"><div><span className="eyebrow">EVIDENCE MIX</span><h2>进步由什么组成</h2></div><BarChart3 size={18} className="panel-icon" /></div><div className="evidence-row"><div className="evidence-label"><span>行动记录</span><strong>1 条</strong></div><div className="evidence-track"><span style={{ width: "34%" }} /></div></div><div className="evidence-row"><div className="evidence-label"><span>理解回应</span><strong>{understandingCount} 条</strong></div><div className="evidence-track"><span className="evidence-green" style={{ width: "67%" }} /></div></div><div className="evidence-row"><div className="evidence-label"><span>实际应用</span><strong>{applicationCount} 条</strong></div><div className="evidence-track"><span className="evidence-gold" style={{ width: "42%" }} /></div><p className="evidence-note"><Sparkles size={13} /> 下一步：给英语练习补一次延迟回忆。</p></div></section></div>
+    <div className="growth-metrics"><article className="metric-card metric-coral"><span className="metric-label">有效行动日</span><strong>{streak}<small> 天</small></strong><p>连续记录节奏</p></article><article className="metric-card metric-navy"><span className="metric-label">本周投入</span><strong>{Math.floor(totalMinutes / 60)}<small>h</small> {totalMinutes % 60}<small>m</small></strong><p>7 天累计专注时长</p></article><article className="metric-card metric-sage"><span className="metric-label">掌握证据</span><strong>{applicationCount + understandingCount}<small> 条</small></strong><p>理解 + 应用形成证据</p></article><article className="metric-card metric-paper"><span className="metric-label">成长等级</span><strong>Lv.{String(currentLevel).padStart(2, "0")}</strong><p>{demoSeed.user.role} · 距离升级 {nextLevelXp} XP</p></article></div>
+    <div className="growth-layout"><section className="panel growth-chart-panel"><div className="panel-heading"><div><span className="eyebrow">RHYTHM TREND</span><h2>近 7 天投入节奏</h2></div><span className="trend-chip"><ArrowUpRight size={13} /> 真实投入</span></div><div className="growth-chart">{weekly.map((bar, index) => <div className="growth-bar-column" key={bar.day}><span className="growth-bar-value">{bar.value > 0 ? bar.label : "—"}</span><div className="growth-bar-track"><span className={index === 3 ? "highlight" : ""} style={{ height: `${Math.min(100, bar.value)}%` }} /></div><span>{bar.day.slice(5)}</span></div>)}</div><div className="chart-caption"><span><i className="legend-dot" /> 有效专注时长</span><strong>按你的记录累计</strong></div></section><section className="panel evidence-panel"><div className="panel-heading"><div><span className="eyebrow">EVIDENCE MIX</span><h2>进步由什么组成</h2></div><BarChart3 size={18} className="panel-icon" /></div><div className="evidence-row"><div className="evidence-label"><span>行动记录</span><strong>{inputCount} 条</strong></div><div className="evidence-track"><span style={{ width: `${(inputCount / evidenceTotal) * 100}%` }} /></div></div><div className="evidence-row"><div className="evidence-label"><span>理解回应</span><strong>{understandingCount} 条</strong></div><div className="evidence-track"><span className="evidence-green" style={{ width: `${(understandingCount / evidenceTotal) * 100}%` }} /></div></div><div className="evidence-row"><div className="evidence-label"><span>实际应用</span><strong>{applicationCount} 条</strong></div><div className="evidence-track"><span className="evidence-gold" style={{ width: `${(applicationCount / evidenceTotal) * 100}%` }} /></div><p className="evidence-note"><Sparkles size={13} /> 理解来自测验 ≥60 分，应用来自完成任务。</p></div></section></div>
     <section className="panel goal-progress-panel"><div className="panel-heading"><div><span className="eyebrow">GOAL PROGRESS</span><h2>目标的真实进度</h2></div><span className="count-badge">只比较自己的基线</span></div><div className="growth-goal-list">{demoSeed.goals.map((goal) => <div className="growth-goal" key={goal.id}><div className="growth-goal-heading"><div><strong>{goal.title}</strong><span>{goal.description}</span></div><em>{goal.progress}%</em></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="growth-goal-footer"><span>{goal.horizon}</span><span>{goal.status}</span></div></div>)}</div></section>
   </div>;
 }

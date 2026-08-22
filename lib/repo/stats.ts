@@ -1,0 +1,85 @@
+import { getPool } from "./pool";
+import type { DbGoal } from "./types";
+
+/**
+ * 成长统计仓储层：纯 SQL 聚合（不涉及任何 AI）。
+ * 所有查询显式携带 user_id；日期统一按 Asia/Shanghai 转换。
+ */
+
+/** 某用户某天（上海时区）创建的记录数 */
+export async function countRecordsOnDay(userId: string, shanghaiDate: string): Promise<number> {
+  const { rows } = await getPool().query<{ count: string }>(
+    `select count(*)::text as count from public.records
+     where user_id = $1 and (occurred_at at time zone 'Asia/Shanghai')::date = $2`,
+    [userId, shanghaiDate],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** 某用户有记录的日期集合（上海时区，去重倒序）——streak 计算基础 */
+export async function listRecordDates(userId: string): Promise<string[]> {
+  const { rows } = await getPool().query<{ day: string }>(
+    `select distinct (occurred_at at time zone 'Asia/Shanghai')::date::text as day
+     from public.records
+     where user_id = $1
+     order by day desc`,
+    [userId],
+  );
+  return rows.map((r) => r.day);
+}
+
+/** 近 N 天每日投入分钟（上海时区，按天分组；无记录的天不返回） */
+export async function dailyMinutesSince(
+  userId: string,
+  sinceShanghaiDate: string,
+): Promise<Array<{ day: string; minutes: number }>> {
+  const { rows } = await getPool().query<{ day: string; minutes: string }>(
+    `select (occurred_at at time zone 'Asia/Shanghai')::date::text as day, sum(minutes)::text as minutes
+     from public.records
+     where user_id = $1 and minutes > 0 and (occurred_at at time zone 'Asia/Shanghai')::date >= $2
+     group by day
+     order by day asc`,
+    [userId, sinceShanghaiDate],
+  );
+  return rows.map((r) => ({ day: r.day, minutes: Number(r.minutes) }));
+}
+
+/** 输入证据：有分类（kind）的记录数 */
+export async function countInputEvidence(userId: string): Promise<number> {
+  const { rows } = await getPool().query<{ count: string }>(
+    `select count(*)::text as count from public.records where user_id = $1 and kind is not null`,
+    [userId],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** 理解证据：测验通过数（score >= 阈值，与 bonus 分数线一致） */
+export async function countUnderstandingEvidence(userId: string, threshold = 60): Promise<number> {
+  const { rows } = await getPool().query<{ count: string }>(
+    `select count(*)::text as count from public.quiz_sessions
+     where user_id = $1 and score is not null and score >= $2`,
+    [userId, threshold],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** 应用证据：已完成任务数 */
+export async function countApplicationEvidence(userId: string): Promise<number> {
+  const { rows } = await getPool().query<{ count: string }>(
+    `select count(*)::text as count from public.tasks where user_id = $1 and status = 'done'`,
+    [userId],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** 计划页重点目标：进行中 → 最近创建 → 前 N 个 */
+export async function listFocusGoals(userId: string, limit = 3): Promise<DbGoal[]> {
+  const { rows } = await getPool().query<DbGoal>(
+    `select * from public.goals
+     where user_id = $1 and status = '进行中'
+     order by created_at desc
+     limit $2`,
+    [userId, limit],
+  );
+  return rows;
+}
