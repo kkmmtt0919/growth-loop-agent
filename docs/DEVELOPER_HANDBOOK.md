@@ -19,16 +19,28 @@
 
 ```text
 app/
-  page.tsx                    桌面 Web 工作台和业务状态编排
+  page.tsx                    桌面 Web 工作台和业务状态编排（含登录态与数据源切换）
   mobile-shell.tsx            Android/窄屏独立移动壳 v4
-  globals.css                 桌面与移动视觉样式
-  api/agent/route.ts          Agent 对话 API
-  api/quiz/route.ts           出题与评分 API
-  api/demo/route.ts           确定性 demo 数据 API
+  globals.css                 桌面与移动视觉样式（含 .auth-* 登录界面）
+  api/auth/register|login|me/ 邮箱/密码注册、登录、会话校验（数据库模式）
+  api/tasks/route.ts          任务状态切换 + 幂等结算/冲正（数据库模式）
+  api/agent/route.ts          Agent 对话 API（数据库模式持久化记录）
+  api/quiz/route.ts           出题与评分 API（数据库模式入库 + bonus 幂等）
+  api/demo/route.ts           工作台数据聚合（数据库模式）/ demo seed（回退）
   api/wechat/route.ts         微信签名、XML 回调和回复
   api/wechat/status/route.ts  非敏感配置状态
 lib/
   demo-data.ts                目标、任务、记录和账本 seed
+  repo/pool.ts                pg 连接池（DATABASE_URL，剥离 sslmode）
+  repo/{users,goals,tasks,records,ledger,quiz}.ts  参数化 SQL，函数签名强制 userId
+  repo/types.ts               数据库行类型
+  service/auth.ts             注册/登录/当前用户（bcrypt + JWT 签发）
+  service/workspace.ts        播种、聚合、记录创建+入账、任务切换、测验奖励
+  service/seed.ts             demo seed ↔ 数据库映射
+  service/errors.ts           ServiceError（业务错误 + HTTP 状态）
+  auth/password.ts            bcrypt 哈希/校验
+  auth/jwt.ts                 jose JWT 签发/验证（HS256，7 天）
+  auth/middleware.ts          authenticate(request) → userId（唯一验签处）
   agent/provider.ts           LLM 配置、规则解析、回退和 Agent 会话
   agent/understanding.ts      意图、类别和 AI Agent 路线解析
   agent/session.ts            本机原型会话状态
@@ -36,7 +48,13 @@ lib/
   wechat/adapter.ts           微信 XML 与 SHA-1 签名工具
 android/                      Capacitor Android 工程
 artifacts/android/            已提交的 debug APK
-scripts/                      Android 构建、模拟器和 WebView CDP 检查
+scripts/
+  db-check.mjs                数据库连接诊断（读 .env.local，列出表）
+  run-migration.mjs           本地执行一条 migration SQL
+  e2e-closed-loop.sh          端到端闭环回归（注册→播种→保存→重登→隔离）
+  idempotency-test.sh         账本幂等回归（完成/重复/撤销/再完成）
+  debug-apk.ps1 等            Android 构建、模拟器和 WebView CDP 检查
+supabase/migrations/          001_init.sql + 002_add_task_version.sql（标准 PG）
 docs/                         产品、微信、Android 和交接文档
 .project-to-act/              项目目标、进度、功能、版本和验收证据
 ```
@@ -90,7 +108,52 @@ Invoke-RestMethod http://127.0.0.1:3000/api/agent
 
 没有 LLM 配置时，`/api/agent` 返回 `mode=demo` 和规则回复是预期结果，不是服务故障。静态文件能打开但这些 API 失败，说明启动方式不正确或反向代理没有转发 `/api/*`。
 
-## 4. Agent 与 LLM
+## 4. 数据层与认证
+
+> 数据层按四层架构组织：Next.js API → Service（业务权限校验）→ Repo（pg + 参数化 SQL）→ PostgreSQL。**不依赖 Supabase 专有能力**，Supabase 仅作为托管 PostgreSQL；迁移腾讯云只需更换 `DATABASE_URL`。
+
+### 4.1 环境变量
+
+```dotenv
+# PostgreSQL 连接串（Supabase pooler 或腾讯云 PG 均可，标准格式）
+DATABASE_URL=postgresql://user:password@host:port/database
+# JWT 签名密钥，生产必须强随机
+JWT_SECRET=<node -e "console.log(require('crypto').randomBytes(48).toString('hex'))">
+```
+
+未配置 `DATABASE_URL` 时，前端与 API 自动回退 demo 原型（`/api/demo` 返回 seed、auth/tasks 返回 503），页面行为不变。
+
+### 4.2 Schema 与迁移
+
+- `supabase/migrations/001_init.sql`：6 表（profiles/goals/tasks/records/ledger_entries/quiz_sessions）+ 索引 + updated_at 触发器，纯标准 PG。
+- `supabase/migrations/002_add_task_version.sql`：tasks.version，用于任务入账 key 版本化。
+- 在目标库执行：SQL Editor 粘贴，或 `node scripts/run-migration.mjs supabase/migrations/001_init.sql`。
+- 连接诊断：`node scripts/db-check.mjs`。
+
+### 4.3 鉴权与数据流
+
+```
+Request → Auth Middleware（authenticate：验证 JWT 签名/有效期 → userId）
+        → API 路由（参数校验）
+        → Service（业务权限校验、多用户隔离决策）
+        → Repo（参数化 SQL，所有查询显式携带 user_id）
+        → PostgreSQL
+```
+
+- 注册/登录：`POST /api/auth/register|login` 返回 `{ token, profile }`；密码 bcrypt 哈希，JWT 7 天有效。
+- 会话校验：`GET /api/auth/me`（`Authorization: Bearer <token>`）。
+- 数据库模式请求一律带 `Authorization: Bearer <token>`；前端登录后自动携带。
+- 账本幂等：`ledger_entries.idempotency_key` 唯一约束 + Repo 事务（`ON CONFLICT DO NOTHING` + 更新余额）；任务入账 key 带 `version`，seed key 带 userId 前缀。
+
+### 4.4 回归
+
+```bash
+bash scripts/e2e-closed-loop.sh      # 注册→播种→保存→重登→数据还在→多用户隔离
+bash scripts/idempotency-test.sh     # 任务 完成/重复/撤销/再完成 净额正确
+node scripts/db-check.mjs            # 连接 + 表清单
+```
+
+## 5. Agent 与 LLM
 
 ### 4.1 调用链
 
@@ -133,7 +196,7 @@ GLM_BASE_URL / GLM_API_KEY / GLM_MODEL
 - 微信文本回调使用 3.8 秒超时，避免微信请求无限等待。
 - `/api/agent` 的 GET 和 `/api/wechat/status` 只返回非敏感状态。
 
-## 5. API 回归手册
+## 6. API 回归手册
 
 ### 5.1 Agent
 
@@ -191,7 +254,7 @@ Invoke-RestMethod http://127.0.0.1:3000/api/demo | ConvertTo-Json -Depth 8
 Invoke-RestMethod http://127.0.0.1:3000/api/wechat/status | ConvertTo-Json
 ```
 
-## 6. 微信接入流程
+## 7. 微信接入流程
 
 ### 6.1 本地代码边界
 
@@ -213,7 +276,7 @@ Invoke-RestMethod http://127.0.0.1:3000/api/wechat/status | ConvertTo-Json
 
 当前没有启用 `WECHAT_ENCODING_AES_KEY` 对应的密文解密流程。若切换到安全/兼容模式，应先补齐加密解析、重放保护、限流、幂等和审计，再进入生产。
 
-## 7. Android 电脑模拟器
+## 8. Android 电脑模拟器
 
 ### 7.1 地址规则
 
@@ -268,7 +331,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/debug-apk.ps1 -A
 
 仓库里的 APK 是 debug 签名，并默认连接模拟器后端。正式发布前必须重新配置 HTTPS、release keystore、AAB、隐私声明、通知权限、断网恢复、真机尺寸和微信生产回调。
 
-## 8. 变更、测试和提交
+## 9. 变更、测试和提交
 
 ### 8.1 修改代码
 
@@ -305,7 +368,7 @@ git ls-remote --heads origin main
 
 不要用 `git add -A` 掩盖未审查的文件；不要把 `.env.local`、SDK、AVD、build 和日志带入 public 仓库。
 
-## 9. 故障排查
+## 10. 故障排查
 
 ### 页面打不开
 
@@ -333,17 +396,19 @@ git ls-remote --heads origin
 
 先确认账号有仓库写权限、远程地址正确、分支没有被保护规则拒绝。不要为了绕过保护规则强推或覆盖他人的提交。
 
-## 10. 已知限制与下一阶段
+## 11. 已知限制与下一阶段
 
-- 当前数据层是确定性 seed + 浏览器 localStorage，尚未接入真实数据库和多用户隔离。
+- ~~当前数据层是确定性 seed + 浏览器 localStorage~~ → **已解决（2026-08-22，E-028/E-029）**：配置 `DATABASE_URL` 后启用邮箱/密码登录与 PostgreSQL 持久化；未配置时仍回退 seed/localStorage 原型。
+- 移动端（Android/移动壳）登录适配未做，手机上暂用 demo 模式或直连远端服务。
 - 21:30 晚报目前是客户端偏好和手动入口，尚未接入可靠的后台定时任务、通知授权和失败重试。
-- 微信仅实现明文文本回调；生产需要安全模式、加密、幂等、限流和审计。
+- 微信仅实现明文文本回调；生产需要安全模式、加密、幂等、限流和审计；微信 OAuth 登录留到邮箱闭环验证后接入。
 - 规则引擎和 LLM 评分已经有原型闭环，但还需要题库、评测集、低分复习策略和长期行为验证。
 - Android 仍是 debug 壳；正式 release、AAB、签名、商店合规、真机适配和离线策略待后续。
+- 生产部署：Next.js 需放国内云（Vercel 国内访问差），数据库迁腾讯云 PostgreSQL（只换 `DATABASE_URL`）。
 
 这些限制不是隐藏错误。修改范围或发布状态时，要在 `.project-to-act/PROJECT_ACCEPTANCE.md` 中补充证据，而不是把原型状态写成生产完成。
 
-## 11. 交接模板
+## 12. 交接模板
 
 接手新任务时，先记录：
 

@@ -8,9 +8,10 @@
 
 | 能力 | 当前实现 | 入口 |
 |---|---|---|
+| 账号与持久化 | 邮箱/密码注册登录、目标/任务/记录/账本 PostgreSQL 持久化、多用户隔离、幂等入账 | `/api/auth/*`、`/api/tasks` |
 | AI 今日对话 | 记录事实、识别意图、给出下一步；无模型配置时使用规则回退 | `/api/agent`、首页 |
 | 学习闭环 | 学习记录 → 生成 2–3 道理解题 → LLM 或规则评分 → XP 回写 | `/api/quiz`、记录页 |
-| 今日行动 | 计划、待办、学习/运动/生活/休息分类、XP 与积分 demo | `/api/demo`、首页/计划 |
+| 今日行动 | 计划、待办、学习/运动/生活/休息分类、XP 与积分结算 | `/api/demo`、首页/计划 |
 | 晚间回顾 | 统一总结当天记录，并依次追问最重要行动、真正理解和明日一步 | 首页晚报入口、Agent `review` 意图 |
 | 微信入口 | 微信公众号首次验证、明文 XML 文本回调、签名校验、LLM 超时回退 | `/api/wechat` |
 | Android App | 独立移动壳 v4；首页一屏 AI 会面，不堆功能、不产生首页纵向滚动 | `android/`、APK |
@@ -60,6 +61,17 @@ npm.cmd run build
 npm.cmd run start -- --hostname 127.0.0.1 --port 3000
 ```
 
+### 启用数据库与账号（可选，推荐）
+
+不配置数据库时，页面使用 demo 数据与浏览器本地存储（原型模式）。要启用**邮箱/密码登录 + 真实持久化**，在 `.env.local` 配置两项：
+
+```dotenv
+DATABASE_URL=postgresql://user:password@host:port/database
+JWT_SECRET=<长随机字符串，用 node -e "console.log(require('crypto').randomBytes(48).toString('hex'))" 生成>
+```
+
+然后在目标 PostgreSQL（Supabase SQL Editor 或 psql）依次执行 [supabase/migrations/001_init.sql](supabase/migrations/001_init.sql) 与 [002_add_task_version.sql](supabase/migrations/002_add_task_version.sql)。数据库采用标准 PostgreSQL，迁移腾讯云只需更换 `DATABASE_URL`。连接诊断与迁移执行见 `scripts/db-check.mjs`、`scripts/run-migration.mjs`。
+
 网页必须通过 Next.js 服务访问，不能直接双击 HTML 或部署到纯静态托管。第一次在另一台电脑配置服务，请先看 [网页服务配置手册](docs/WEB_SERVICE_SETUP.md)。
 
 ### 检查项目
@@ -94,6 +106,32 @@ Invoke-RestMethod http://127.0.0.1:3000/api/agent
 返回值只包含模式、供应商和是否配置 endpoint/model 等非敏感状态，不返回 API Key。
 
 ## API 速查
+
+### 注册与登录（数据库模式）
+
+```powershell
+$registerBody = @{ email = 'you@example.com'; password = 'your-password-8+'; displayName = '你的昵称' } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3000/api/auth/register -ContentType 'application/json' -Body $registerBody
+
+$loginBody = @{ email = 'you@example.com'; password = 'your-password-8+' } | ConvertTo-Json
+$login = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3000/api/auth/login -ContentType 'application/json' -Body $loginBody
+$token = $login.token
+```
+
+`POST /api/auth/register` 与 `POST /api/auth/login` 返回 `{ token, profile }`；`GET /api/auth/me`（带 `Authorization: Bearer <token>`）校验会话。注册后自动播种 demo 目标/任务/记录/账本。
+
+### 任务切换（数据库模式）
+
+```powershell
+Invoke-RestMethod `
+  -Method Patch `
+  -Uri http://127.0.0.1:3000/api/tasks `
+  -Headers @{ Authorization = "Bearer $token" } `
+  -ContentType 'application/json' `
+  -Body (@{ taskId = '<task-uuid>'; done = $true } | ConvertTo-Json)
+```
+
+`PATCH /api/tasks` 在数据库事务内切换任务状态并幂等结算/冲正 XP 与积分。数据库模式下，`/api/demo`、`/api/agent`、`/api/quiz` 均需携带 `Authorization: Bearer <token>` 请求头。
 
 ### Agent 对话
 
@@ -193,8 +231,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/debug-apk.ps1 -A
 
 ## 数据、安全与发布边界
 
-- demo 数据来自 `lib/demo-data.ts`，浏览器记录原型使用 localStorage；当前没有真实数据库、多用户隔离、后台定时任务或数据导出链路。
-- LLM 只负责理解、建议、出题和评分；任务、XP、积分等写操作应继续由规则和受控服务端处理。
+- demo 数据来自 `lib/demo-data.ts`；**配置 `DATABASE_URL` 后启用 PostgreSQL 持久化**（邮箱/密码登录、目标/任务/记录/账本真实入库、多用户隔离、幂等入账），未配置时回退 localStorage 原型；后台定时任务与数据导出链路仍待后续。
+- 架构分层：Next.js API → Service（业务权限校验）→ Repo（pg + 参数化 SQL，查询显式带 user_id）→ PostgreSQL。数据库使用标准 PostgreSQL，不依赖 Supabase 专有能力；迁移腾讯云只需更换 `DATABASE_URL`。
+- 密码使用 bcrypt 哈希，会话使用 JWT（`JWT_SECRET` 签发，7 天有效）。
+- LLM 只负责理解、建议、出题和评分；任务、XP、积分等写操作由受控服务端 + 幂等账本处理。
 - 不要提交 `.env.local`、API Key、微信 Token、`android/local.properties`、Android build 目录、模拟器镜像或本机 SDK 路径。
 - 微信回调当前只支持明文文本；不要在未补齐加密、重放保护、限流和审计前接收生产敏感消息。
 - 仓库目前没有单独的开源许可证文件；如需对外允许复用，请先补充许可证和第三方依赖声明。
@@ -219,4 +259,4 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/debug-apk.ps1 -A
 
 ## 当前版本
 
-`0.2.0-prototype` · Android 移动壳 v4 · public GitHub 源码与 debug APK 已交付。生产数据库、后台调度、微信加密模式、release 签名和真实用户验收属于后续版本范围。
+`0.2.0-prototype` · 邮箱/密码登录与 PostgreSQL 持久化数据层已落地（端到端验证通过）· Android 移动壳 v4 · public GitHub 源码与 debug APK 已交付。后台 21:30 调度、微信登录/加密模式、release 签名、腾讯云 PG 迁移和真实用户验收属于后续版本范围。

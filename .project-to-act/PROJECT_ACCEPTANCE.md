@@ -1,5 +1,15 @@
 # 项目验收
 
+## 数据层验收补充（2026-08-22）
+
+| ID | 验收项 | 结果 | 证据 |
+|---|---|---|---|
+| A-030 | 邮箱/密码登录与 PostgreSQL 持久化闭环可端到端跑通 | 通过（端到端） | 注册→首登播种→保存记录（LLM 识别）→退出→重登→数据仍在（records/xp 正确累加）；`scripts/e2e-closed-loop.sh` 可重复回归 | E-028 |
+| A-031 | 账本幂等与多用户数据隔离生效 | 通过（回归） | 任务 完成(+20)→重复完成(不变)→撤销(-20)→再完成(+20) 净额精确；用户 B 看不到用户 A 数据；`scripts/idempotency-test.sh` 可重复回归 | E-029 |
+
+| E-028 | 2026-08-22 | `npm run typecheck`; `npm run lint`; `npm run build`；`scripts/db-check.mjs`；`scripts/e2e-closed-loop.sh`；本地 HTTP 注册/登录/保存/重登旅程 | 全部通过；Supabase（PG）连接 OK、6 表就绪；注册→播种（2 目标/5 任务/3 记录/账本）→保存记录 persisted=true→重登 records=5/xp=31；多用户隔离（B 不见 A 数据）；未配置 `DATABASE_URL` 时 `/api/demo` 返回 seeded-demo、auth/tasks 返回 503（回退正确） | `supabase/migrations/001_init.sql`、`lib/repo/*`、`lib/service/*`、`lib/auth/*`、`app/api/auth/*`、`app/api/tasks/route.ts`、`app/api/demo|agent|quiz/route.ts`、`app/page.tsx`、`scripts/e2e-closed-loop.sh` | 数据层与登录闭环端到端通过；微信 OAuth、后台调度、腾讯云迁移、release 签名仍未验收 | 工作区、Node HTTP、PostgreSQL |
+| E-029 | 2026-08-22 | `scripts/idempotency-test.sh`；`scripts/db-check.mjs`；typecheck/lint/build | 任务 toggle 幂等：完成 +20 → 重复完成不变 → 撤销 -20 → 再完成 +20 → 撤销再完成净额正确；seed 账本 key 带 userId 前缀、任务入账 key 带 version；连接诊断 OK | `scripts/idempotency-test.sh`、`supabase/migrations/002_add_task_version.sql`、`lib/repo/tasks.ts`、`lib/repo/ledger.ts`、`lib/service/seed.ts` | 幂等与隔离回归通过；生产级限流、审计、微信加密仍未验收 | 工作区、Node HTTP、PostgreSQL |
+
 ## 网页服务配置验收补充（2026-08-21）
 
 | ID | 验收项 | 结果 | 证据 |
@@ -29,10 +39,10 @@
 
 ## 当前验收结论
 
-- 结论：原型 Gate 部分通过；GitHub public 源码与 APK 发布子项已通过
-- 验收范围：`0.2.0-prototype` 对话优先首页、紧凑待办/日程、单字段随手记、晚报统一提问、21:30 晚间回顾偏好、受管 LLM 接入、微信公众号文本回调、AI Agent 学习路线、理解测验评分、运动/生活/休息行动、可选番茄钟、Capacitor Android debug APK、独立移动壳 v3、公开 GitHub 发布和 APK AI 调试工具
-- 最后检查：2026-08-11（类型、Lint、脚本 doctor/smoke/logs、公开仓库 staged 清单与 APK 大小/哈希；上一轮已完成生产构建、Agent/测验 HTTP 旅程、浏览器与 Android Gradle debug 回归）
-- 遗留问题：当前记录、测验态、wellbeing 分类统计、回顾偏好和番茄钟使用本机 localStorage/客户端状态而非真实数据库；21:30 尚未接后台定时任务/微信通知；路线进度、题目难度与评分一致性评测、真实微信账号、公网 HTTPS、加密模式、多用户隔离、浮层完整无障碍、Android 正式签名/真机联调、用户试验和生产隐私 Gate 尚未完成
+- 结论：原型 Gate 部分通过；数据层（邮箱/密码登录 + PostgreSQL 持久化）与登录闭环端到端通过；GitHub public 源码与 APK 发布子项已通过
+- 验收范围：`0.2.0-prototype` 对话优先首页、紧凑待办/日程、单字段随手记、晚报统一提问、21:30 晚间回顾偏好、受管 LLM 接入、微信公众号文本回调、AI Agent 学习路线、理解测验评分、运动/生活/休息行动、可选番茄钟、Capacitor Android debug APK、独立移动壳 v3、公开 GitHub 发布、APK AI 调试工具、邮箱/密码登录、PostgreSQL 持久化数据层、幂等账本、多用户隔离
+- 最后检查：2026-08-22（数据层端到端 E-028、幂等/隔离回归 E-029、typecheck/lint/build、连接诊断）
+- 遗留问题：移动端（Android/移动壳）登录适配未做；21:30 尚未接后台定时任务/微信通知；微信 OAuth、腾讯云 PG 迁移、Agent 评测集、路线进度、题目难度与评分一致性评测、真实微信账号、公网 HTTPS、加密模式、浮层完整无障碍、Android 正式签名/真机联调、用户试验和生产隐私 Gate 尚未完成
 
 - E-024 发布复核（2026-08-11）：`gh repo view redmaplewww/growth-loop-agent` 确认 `isPrivate=false`、默认分支为 `main`；GitHub Contents API 与 raw 下载均确认 `artifacts/android/growth-loop-debug.apk` 存在，远程大小 4,117,426 bytes，SHA-256 `F69502AFA1F227F68DF64A97D111C4161A9CEEA67A9D7338D56823B96C96987C` 与本地一致。`agent/public-apk-debug-tooling` 与 `main` 均已推送。
 
@@ -133,3 +143,4 @@
 - 2026-08-10｜按用户反馈取消记录页“自己的话/输入/输出”硬分栏，并将题目集中到晚报｜E-022｜`typecheck`、`lint`、`build` 通过；escaped-UTF8 HTTP 回归确认 `/api/agent` review 返回三问；桌面/Android 记录入口均为单文本框，保存后不自动出题，晚报提示和记录摘要可见；结论：单字段随手记与晚报统一回顾原型满足，后台调度、通知、持久化、评分评测仍未验收。
 - 2026-08-10｜按用户反馈推倒重做 Android APK 美工与移动交互｜E-023｜`typecheck`、`lint`、`build`、`android:debug` 通过；Android WebView CDP 确认 `.app-mobile-v3=true`、视口 412×867、body/document 宽度 412；首页、路线、收集、节奏四页切换，记录抽屉单文本框和无横向溢出通过；最近 logcat 无 fatal/Chromium/JS 错误；结论：移动产品视觉原型满足，系统返回、通知、真实数据层、真机和正式发布仍未验收。
 - 2026-08-11｜按用户要求准备 public GitHub 仓库，并交付 APK AI 调试说明/脚本｜E-024｜Git staged 检查、APK 4.1 MB/哈希、doctor/smoke/logs、typecheck/lint 和 Node 语法检查通过；结论：源码、Android 工程、debug APK、调试脚本和忽略规则已具备，待创建远程仓库并 push 后完成发布验收。
+- 2026-08-22｜检查数据层端到端闭环、幂等账本与多用户隔离｜E-028、E-029｜注册→播种→保存→重登→数据还在、用户隔离、任务 toggle 幂等（+20/-20/+20）全部通过；typecheck/lint/build 全过；连接诊断 OK（Supabase PG，6 表）｜结论：数据层与登录闭环端到端验收通过；微信 OAuth、腾讯云迁移、后台调度、移动端登录适配和生产 Gate 仍未验收。

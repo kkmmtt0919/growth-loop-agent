@@ -19,3 +19,6 @@ android/app/src/main/assets/
 android/app/capacitor.build.gradle
 android/capacitor.settings.gradle
 android/local.properties
+
+# Local assistant memory (never publish)
+.workbuddy/

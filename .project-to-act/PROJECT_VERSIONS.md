@@ -1,5 +1,11 @@
 # 项目版本
 
+## 数据层补充（2026-08-22）
+
+- `0.2.0-prototype` 落地邮箱/密码登录与 PostgreSQL 持久化数据层：四层架构（API→Service→Repo→PG）、`/api/auth/*` 自建 JWT + bcrypt、记录/任务/账本真实入库、多用户隔离、幂等账本。
+- 证据：E-028（端到端验证）、E-029（幂等/隔离回归）；Supabase（PG）托管起步，仅作 PostgreSQL 使用，迁移腾讯云只换 `DATABASE_URL`。
+- 兼容性：未配置 `DATABASE_URL` 时前端与 API 完全回退 demo 原型；新增 `/api/auth/*`、`/api/tasks` 路由，原有 `/api/demo|agent|quiz` 保持兼容。
+
 ## 网页服务文档补充（2026-08-21）
 
 - `0.2.0-prototype` 新增 `docs/WEB_SERVICE_SETUP.md`：把 Next.js 服务、静态托管边界、LLM demo 回退、API 验收、局域网/生产部署和 Android 地址规则集中说明。
@@ -26,18 +32,20 @@
 
 - 版本号：`0.2.0-prototype`
 - 发布状态：GitHub public 已发布（产品仍为 `0.2.0-prototype`，非生产 release）
-- 兼容性说明：Next.js 16.3.0 + React 19.2.8；当前为本地原型，数据来自确定性 seed，单字段记录以浏览器 localStorage 回读，白天不自动出题，晚报通过受管 OpenAI-compatible profile 统一提问；微信公众号接口支持明文签名校验与 XML 文本回调；Android 通过 Capacitor 8.5.0 壳复用服务端，移动端使用独立 v4 视觉与交互，默认模拟器地址为 `10.0.2.2:3000`；README 与开发者/AI 手册已随源码发布，正式上线前仍需公网 HTTPS、数据库、正式签名和官方账号审核
-- 最后更新：2026-08-11
+- 兼容性说明：Next.js 16.3.0 + React 19.2.8；本地原型数据来自确定性 seed，配置 `DATABASE_URL` + `JWT_SECRET` 后启用邮箱/密码登录（`/api/auth/*`）与 PostgreSQL 持久化（目标/任务/记录/账本），未配置时回退 demo；白天不自动出题，晚报通过受管 OpenAI-compatible profile 统一提问；微信公众号接口支持明文签名校验与 XML 文本回调；Android 通过 Capacitor 8.5.0 壳复用服务端，移动端使用独立 v4 视觉与交互，默认模拟器地址为 `10.0.2.2:3000`；README 与开发者/AI 手册已随源码发布，正式上线前仍需公网 HTTPS、腾讯云 PG 迁移、正式签名和官方账号审核
+- 最后更新：2026-08-22
 
 ## 下一版本计划
 
 - `0.2.0-prototype`｜2026-08-11｜公开 GitHub 与 APK 调试交付｜创建 public 仓库 `redmaplewww/growth-loop-agent`，推送源码、Android 工程、4.1 MB debug APK、PowerShell doctor/build/install/run/smoke/logs 脚本和 AI 调试说明；远程 APK 哈希与本地一致｜回应用户要求将 APK 与可复现调试入口一并公开｜正式 HTTPS、release keystore、AAB/真机和生产微信仍待后续｜E-024｜公开发布子项通过，整体原型 Gate 仍部分通过。
 
 - 目标版本：`0.3.0-mvp`
-- 计划内容：持久化任务/记录/账本、其余工作台页面、微信登录与订阅适配、Agent 评测集
+- 计划内容：~~持久化任务/记录/账本~~（已完成 E-028）、微信登录与订阅适配、Agent 评测集、后台 21:30 晚报调度、腾讯云 PG 迁移演练
 - 发布条件：本地端到端回放、真实测试账号回调通过、隐私/幂等/安全 Gate 通过
 
 ## 版本历史
+
+- `0.2.0-prototype`｜2026-08-22｜邮箱/密码登录与 PostgreSQL 持久化数据层｜四层架构落地、`/api/auth/*` 自建认证、记录/任务/账本真实持久化、多用户隔离、幂等账本；未配置数据库回退 demo 原型｜用户审核定稿"不绑定 Supabase 特有能力"架构；MVP 登录闭环验证优先｜兼容原有 API/前端；新增 auth/tasks 路由｜E-028、E-029｜数据层端到端通过，生产 Gate 仍部分通过。
 
 - `0.2.0-prototype`｜2026-08-20｜README 与开发者/AI 手册发布｜补齐 clone、配置、API、LLM、微信、Android、测试、故障排查、安全边界、Git 发布和交接模板；文档发布提交 `c3fc3aeece2bcaa8ca0dfb75dd0b308273d82d41` 已进入远程 `main`｜E-026｜源码文档交付通过，生产 Gate 仍部分通过。
 
