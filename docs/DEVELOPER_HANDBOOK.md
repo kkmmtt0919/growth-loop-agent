@@ -10,7 +10,8 @@
 2. `AGENTS.md`：当前 Next.js 版本的仓库约束。
 3. `.project-to-act/PROJECT_OVERVIEW.md`：目标、范围和当前焦点。
 4. 本手册：实施、测试和交付流程。
-5. 按任务打开 `docs/WECHAT_INTEGRATION.md`、`docs/ANDROID_BUILD.md` 或 `docs/ANDROID_APK_DEBUG_AI.md`。
+5. 如果是新环境，先按 `docs/WEB_SERVICE_SETUP.md` 配好 Web 服务；不要把仓库当成纯静态网页。
+6. 按任务打开 `docs/WECHAT_INTEGRATION.md`、`docs/ANDROID_BUILD.md` 或 `docs/ANDROID_APK_DEBUG_AI.md`。
 
 项目台账是长期事实源。修改产品范围、功能、版本、验收或发布状态时，要同步对应的 `.project-to-act` 文件，并用 `init_project_management.py --validate` 检查。
 
@@ -41,6 +42,8 @@ docs/                         产品、微信、Android 和交接文档
 ```
 
 ## 3. 本地启动
+
+> Web 入口必须由 Next.js 服务提供。首页的 HTML 可以被预渲染，但 `/api/*` 和客户端交互不能通过 `file://`、GitHub Pages 或 `out/index.html` 工作。完整的跨机器配置步骤见 [网页服务配置手册](WEB_SERVICE_SETUP.md)。
 
 ### 3.1 安装依赖
 
@@ -74,6 +77,18 @@ npm.cmd run build
 ```
 
 失败时先修复命令自身报告的问题，再继续 Android 或远程发布。不要用“页面看起来能打开”代替构建和类型检查。
+
+### 3.4 服务验收
+
+至少确认以下三个请求都能返回：
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3000/
+Invoke-RestMethod http://127.0.0.1:3000/api/demo
+Invoke-RestMethod http://127.0.0.1:3000/api/agent
+```
+
+没有 LLM 配置时，`/api/agent` 返回 `mode=demo` 和规则回复是预期结果，不是服务故障。静态文件能打开但这些 API 失败，说明启动方式不正确或反向代理没有转发 `/api/*`。
 
 ## 4. Agent 与 LLM
 

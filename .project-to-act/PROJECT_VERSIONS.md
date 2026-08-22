@@ -1,5 +1,10 @@
 # 项目版本
 
+## 网页服务文档补充（2026-08-21）
+
+- `0.2.0-prototype` 新增 `docs/WEB_SERVICE_SETUP.md`：把 Next.js 服务、静态托管边界、LLM demo 回退、API 验收、局域网/生产部署和 Android 地址规则集中说明。
+- 证据：E-027；干净 clone 可完成 Web 安装、构建、启动和 API smoke；Android `cap sync` 依赖未跟踪的生成目录，已在文档中明确为当前边界。
+
 ## 文档交付补充（2026-08-20）
 
 - `0.2.0-prototype` 新增 public 仓库交接文档：README 负责使用者快速上手，`docs/DEVELOPER_HANDBOOK.md` 负责开发者/AI 的构建、API、微信、Android、测试和发布路径。

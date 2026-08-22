@@ -60,6 +60,8 @@ npm.cmd run build
 npm.cmd run start -- --hostname 127.0.0.1 --port 3000
 ```
 
+网页必须通过 Next.js 服务访问，不能直接双击 HTML 或部署到纯静态托管。第一次在另一台电脑配置服务，请先看 [网页服务配置手册](docs/WEB_SERVICE_SETUP.md)。
+
 ### 检查项目
 
 ```powershell
@@ -181,6 +183,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/debug-apk.ps1 -A
 | 文档 | 内容 |
 |---|---|
 | [开发者与 AI 手册](docs/DEVELOPER_HANDBOOK.md) | 从 clone、配置、开发、测试到发布的完整交接手册 |
+| [网页服务配置](docs/WEB_SERVICE_SETUP.md) | 从干净 clone、环境变量到 Web/Node 服务验收；解释静态托管、API 和 Android 地址边界 |
 | [产品设计方案](docs/PRODUCT_DESIGN_V1.md) | 产品目标、用户闭环、Agent、游戏化和微信路线 |
 | [微信公众号接入](docs/WECHAT_INTEGRATION.md) | 微信服务器配置、签名校验和文本回调 |
 | [Android 构建](docs/ANDROID_BUILD.md) | SDK、AVD、Capacitor 和 Android Studio |

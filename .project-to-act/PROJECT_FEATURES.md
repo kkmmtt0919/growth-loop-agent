@@ -1,5 +1,11 @@
 # 项目功能
 
+## 网页服务文档增量（2026-08-21）
+
+| ID | 功能 | 优先级 | 状态 | 依赖 | 验收口径 | 证据 |
+|---|---|---|---|---|---|---|
+| F-035 | 干净 clone 网页服务配置手册 | P1 | 已完成（原型） | F-034 | 文档能指导 Windows/macOS/Linux 完成 npm 安装、env、dev/start、API 验收；明确不支持直接打开 HTML/纯静态托管；说明 LLM 可选、生产 HTTPS 和 Android 地址边界 | E-027 |
+
 ## 文档功能增量（2026-08-20）
 
 | ID | 功能 | 优先级 | 状态 | 依赖 | 验收口径 | 证据 |
@@ -65,6 +71,8 @@
 | F-032 | APK 公开发布与 AI 调试工具 | P1 | 已完成（发布准备） | F-027、F-028、F-031 | 公开仓库包含源码、Android 工程、debug APK、构建忽略规则和可供人/AI 使用的 `doctor/build/install/run/smoke/logs` 调试脚本；不包含密钥、本机 SDK 路径或构建目录 | E-024 |
 
 ## 功能变更历史
+
+- 2026-08-21｜F-035｜新增网页服务配置手册并在 README/开发者手册建立入口｜解决 clean clone 后把 Next.js 服务误当成静态网页、忽略 `/api/*` 和混淆 `127.0.0.1`/`10.0.2.2` 的问题｜补充 Windows/macOS/Linux 启动、生产 Node 服务、健康检查、LLM demo 回退、静态托管边界和交接清单；未改变运行时代码｜E-027｜来源：clean clone、build、start、API smoke 与 Capacitor sync 对照。
 
 - 2026-08-20｜F-034｜补齐 README 与开发者/AI 手册并发布到 public GitHub｜降低新开发者和 AI 接手时的上下文成本，明确命令、地址、回退和生产边界｜远程 `main` 已包含 README 与 `docs/DEVELOPER_HANDBOOK.md`，仍需随实现变化维护｜E-026｜来源：typecheck/lint/build、链接检查、GitHub Contents API。
 

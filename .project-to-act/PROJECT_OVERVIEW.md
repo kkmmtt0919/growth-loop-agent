@@ -1,6 +1,6 @@
 # 项目总览
 
-> 2026-08-20 文档交付基线：README 已补齐快速启动、功能范围、API、LLM、微信、Android、测试、安全边界和贡献流程；新增 `docs/DEVELOPER_HANDBOOK.md`，用于开发者与 AI 接手项目时按固定顺序完成构建、回归和发布。
+> 2026-08-21 文档交付基线：README 已补齐快速启动、功能范围、API、LLM、微信、Android、测试、安全边界和贡献流程；新增 `docs/DEVELOPER_HANDBOOK.md` 与 `docs/WEB_SERVICE_SETUP.md`，用于开发者、AI 和新环境操作者区分 Next.js 服务与纯静态托管。
 
 > 2026-08-11 v4 设计基线：Android 首页收敛为“一屏 AI 会面区”。首页只保留 AI 状态、一个下一步行动、一个自由记录框和晚间回顾/进度入口；主要动作在 412×867 视口内完成，不产生首页纵向滚动，路线/收集/节奏等细化功能由底部导航按需进入。
 
@@ -22,7 +22,7 @@
 - 风险等级：T3（涉及长期个人行为数据、Agent 写操作与微信主动提醒）
 - 当前阶段：MVP 原型实现
 - 当前状态：原型可运行，源码、Android 工程、debug APK 与交接文档已发布到 GitHub public；非生产 release
-- 最后更新：2026-08-20
+- 最后更新：2026-08-21
 
 ## 项目目标
 
@@ -68,7 +68,8 @@
 
 - README：面向使用者，覆盖 clone、demo 启动、API 示例、LLM/微信/Android 配置、测试命令、限制和常见问题。
 - 开发者与 AI 手册：覆盖目录、调用链、回退语义、API 回归、微信明文边界、Android CDP smoke、Git 发布和交接模板。
-- 证据：E-026；文档不包含密钥、Token、本机 SDK 路径或未脱敏日志。
+- 网页服务配置手册：覆盖干净 clone、Node.js dev/start、API 健康检查、局域网/生产服务、静态托管边界、LLM 可选配置和 Android 地址差异。
+- 证据：E-026、E-027；文档不包含密钥、Token、本机 SDK 路径或未脱敏日志。
 
 ## 按需读取索引
 
@@ -96,6 +97,8 @@
 - D-014｜2026-08-11｜公开仓库随源码交付 debug APK，并把 APK 调试流程写成可供 AI 执行的脚本｜用户希望直接从 GitHub 获取源码和 APK，并降低后续 AI/开发者调试模拟器的上下文成本｜公开提交 `artifacts/android/growth-loop-debug.apk`、`scripts/debug-apk.ps1`、`scripts/debug-apk-cdp.mjs` 与 `docs/ANDROID_APK_DEBUG_AI.md`；`.env.local`、Android SDK 路径、build 目录和 generated assets 不提交；脚本默认使用 `GrowthLoopDesktop`/`emulator-5554` 和 WebView CDP 9222｜E-024｜用户明确要求｜正式 release、HTTPS 后端、签名和真实用户数据仍需另行配置。
 
 - D-016｜2026-08-20｜把 public GitHub 仓库的 README 与开发手册作为独立交接入口｜源码和 APK 已公开，但新开发者仍需从多份文档拼接启动、API、LLM、微信、Android 与发布步骤；完整手册可以减少误用 `10.0.2.2`、泄露密钥和误判 demo 回退的风险｜更新 `README.md`，新增 `docs/DEVELOPER_HANDBOOK.md`，明确原型限制、验证矩阵与 Git 发布规则｜E-026｜用户明确要求｜后续文档随 API、Android 网络策略或生产边界变化同步复审。
+
+- D-017｜2026-08-21｜把网页服务配置单独写成从干净 clone 可执行的手册｜此前有人把仓库当成静态网页或直接打开 `out/index.html`，导致首页能显示但 `/api/*` 不可用；干净 clone 的 Android `cap sync` 还会暴露生成目录不在 Git 中的边界｜新增 `docs/WEB_SERVICE_SETUP.md`，明确 Next.js 服务、静态托管限制、dev/start、API 验收、局域网/生产部署和 Android 地址；同步 README 与开发者手册入口｜E-027｜用户明确要求与 clean clone 回归｜服务启动命令、部署方式或 Capacitor webDir 变化后复审。
 
 - D-003｜2026-08-09｜采用服务号 + 小程序组合，而非纯聊天入口｜聊天适合低摩擦输入，小程序适合日历、账本和报告｜增加小程序开发范围，换取更完整体验｜E-003｜方案默认，待负责人确认｜原型评审时复审。
 - D-005｜2026-08-09｜学习记录采用输出优先闭环｜单纯输入不能证明理解；输出、教回和检验更适合形成可回看的成长证据｜增加测验生成、LLM 评分和 XP 回写；题库难度与评分一致性进入下一轮评测｜E-013｜用户明确要求｜真实学习样本回放后复审。

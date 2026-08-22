@@ -1,5 +1,11 @@
 # 项目进度
 
+## 网页服务配置进度（2026-08-21）
+
+| 任务 | 状态 | 负责人 | 完成条件 | 证据 ID | 最后更新 |
+|---|---|---|---|---|---|
+| 干净 clone 网页服务配置手册 | 已完成（原型） | Codex | 新环境可按手册启动 Next.js、验证首页与 `/api/*`；文档明确纯静态托管不受支持、LLM 可选、生产 Node 服务和 Android 地址规则 | E-027 | 2026-08-21 |
+
 ## 文档交付进度（2026-08-20）
 
 | 任务 | 状态 | 负责人 | 完成条件 | 证据 ID | 最后更新 |
@@ -71,6 +77,8 @@
 12. 配置 Android 的正式 HTTPS 后端与签名 keystore，补真机安装、断网/恢复和微信授权回归，再产出 release APK/AAB。
 
 ## 进度历史
+
+- 2026-08-21｜新增 `docs/WEB_SERVICE_SETUP.md`，并在 README/开发者手册中建立入口｜E-027｜clean clone 的 `npm ci`、`npm run build`、`npm run start`、首页/API smoke 通过；同时记录静态托管和 fresh clone Capacitor 目录边界｜下一步修复 Android fresh clone 的生成目录依赖并加入 CI gate｜来源：本地与独立临时 clone 回归。
 
 - 2026-08-20｜补齐 README 与开发者/AI 手册并推送 public GitHub｜E-026｜本地 typecheck/lint/build、链接/敏感路径检查通过；文档发布提交 `c3fc3aeece2bcaa8ca0dfb75dd0b308273d82d41` 已进入远程 `main`，仓库 `isPrivate=false`，README 与 `docs/DEVELOPER_HANDBOOK.md` 可通过 Contents API 取得｜下一步随 API、Android 网络策略和生产边界变化同步文档｜来源：GitHub CLI、git remote、工作区检查。
 

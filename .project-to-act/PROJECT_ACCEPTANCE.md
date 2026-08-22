@@ -1,5 +1,13 @@
 # 项目验收
 
+## 网页服务配置验收补充（2026-08-21）
+
+| ID | 验收项 | 结果 | 证据 |
+|---|---|---|---|
+| A-029 | 新开发者从干净 clone 能按文档启动可交互的 Web/API 服务，而不是误用静态 HTML | 通过（原型） | `docs/WEB_SERVICE_SETUP.md` 覆盖 Windows/macOS/Linux、env、dev/start、API smoke、静态托管限制、LLM 可选、生产 Node 服务和 Android 地址；独立 clean clone 回归通过 Web 构建、启动和无 LLM API 请求 | E-027 |
+
+| E-027 | 2026-08-21 | 独立临时 clone；`npm ci --ignore-scripts`; `npm.cmd run build`; `npm.cmd run start -- --hostname 127.0.0.1 --port 3310`; GET `/`、`/api/demo`、`/api/agent`、`/api/wechat/status`；POST `/api/agent`；`npx.cmd cap sync android` 对照 | Web 安装/构建/启动和 API smoke 全部通过；无 LLM 时 `mode=demo`、`replySource=rules`；静态/Android 边界复现：clean clone 没有 `out` 和 generated assets，`cap sync` 失败并已在文档说明 | `docs/WEB_SERVICE_SETUP.md`、`README.md`、`docs/DEVELOPER_HANDBOOK.md`、`capacitor.config.ts`、`.gitignore` | Web 服务配置手册交付通过；Android fresh clone 生成目录依赖、生产 HTTPS、数据库和真实微信仍未验收 | 独立临时 clone、Node HTTP、Capacitor CLI |
+
 ## 文档交付验收补充（2026-08-20）
 
 | ID | 验收项 | 结果 | 证据 |
