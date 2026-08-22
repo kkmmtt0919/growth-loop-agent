@@ -146,6 +146,23 @@ Request → Auth Middleware（authenticate：验证 JWT 签名/有效期 → use
 - 账本幂等：`ledger_entries.idempotency_key` 唯一约束 + Repo 事务（`ON CONFLICT DO NOTHING` + 更新余额）；任务入账 key 带 `version`，seed key 带 userId 前缀。
 
 ### 4.4 回归
+### 4.5 晚间晚报与生产定时（Cron）
+
+晚报生成链路：`POST /api/evening-report`（幂等，`UNIQUE(user_id, report_date)` 一天一份）→ Service 拉当天记录 → `summarizeRecords`（纯函数分组/截断）→ Agent(review) 生成三问 → 规则回退 → 存 `evening_reports` 表。
+
+- 懒触发（MVP）：前端 ready 模式下查 `GET /api/evening-report/today`，已过 21:30 且未生成则自动 `POST`。
+- **生产准点（部署后配置）**：平台定时调用 `POST /api/evening-report`，需携带系统凭据 `CRON_SECRET`：
+
+```bash
+# 服务器 crontab（每天 21:30，按用户逐个触发；批量遍历由部署脚本循环）
+30 21 * * * curl -X POST https://你的域名/api/evening-report   -H "Authorization: Bearer $CRON_SECRET"   -H "Content-Type: application/json"   -d '{"userId":"<用户uuid>"}'
+```
+
+腾讯云 SCF 定时触发器：创建每天 21:30 的定时触发函数，函数内带 `CRON_SECRET` 调上述接口（或循环用户列表逐个调用，复用同一 Service）。
+
+- `CRON_SECRET`：环境变量，仅服务端持有；`resolveAuth` 先比对系统凭据再验用户 JWT，普通用户只能生成自己的晚报（无 `userId` 参数入口）。
+- 已知边界：并发双请求可能触发两次 LLM 调用（数据库幂等保证只存一行，后写覆盖先写）；生成锁（Redis TTL）待用户量上来再加。
+
 
 ```bash
 bash scripts/e2e-closed-loop.sh      # 注册→播种→保存→重登→数据还在→多用户隔离

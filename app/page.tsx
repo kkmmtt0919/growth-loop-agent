@@ -97,6 +97,14 @@ function applyWorkspaceData(data: typeof demoSeed) {
 
 type AuthMode = "loading" | "demo" | "login" | "ready";
 
+/** 晚报卡片单状态驱动（杜绝 loading+error 等非法组合） */
+type EveningState = "loading" | "no-report" | "generating" | "ready" | "error";
+
+type EveningCardState = {
+  state: EveningState;
+  summary?: string;
+};
+
 /** 数据库记录 -> 前端 LogEntry（保存后即时回显用） */
 function recordToLogEntry(record: {
   id: string;
@@ -203,6 +211,7 @@ export default function Home() {
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [evening, setEvening] = useState<EveningCardState>({ state: "loading" });
 
   useEffect(() => {
     const storedSessionId = window.localStorage.getItem(SESSION_STORAGE_KEY) || `session-${Date.now()}`;
@@ -252,6 +261,46 @@ export default function Home() {
       cancelled = true;
     };
   }, []);
+
+  // 晚报懒触发：ready 模式下查今日晚报；已过 21:30 且未生成则自动生成（服务端幂等）
+  useEffect(() => {
+    if (authMode !== "ready" || !authToken) return;
+    let cancelled = false;
+    const headers: Record<string, string> = { Authorization: `Bearer ${authToken}` };
+    (async () => {
+      try {
+        const res = await fetch("/api/evening-report/today", { headers });
+        if (!res.ok) throw new Error("evening unavailable");
+        const { report } = (await res.json()) as { report?: { summary: string } | null };
+        if (cancelled) return;
+        if (report) {
+          setEvening({ state: "ready", summary: report.summary });
+          return;
+        }
+        const now = new Date();
+        const reached = now.getHours() > EVENING_REVIEW_HOUR || (now.getHours() === EVENING_REVIEW_HOUR && now.getMinutes() >= EVENING_REVIEW_MINUTE);
+        if (!reached) {
+          setEvening({ state: "no-report" });
+          return;
+        }
+        setEvening({ state: "generating" });
+        const gen = await fetch("/api/evening-report", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...headers },
+        });
+        if (!gen.ok) throw new Error("evening generate failed");
+        const data = (await gen.json()) as { report?: { summary?: string } };
+        if (!cancelled) {
+          setEvening({ state: "ready", summary: data.report?.summary ?? "今日晚报已生成" });
+        }
+      } catch {
+        if (!cancelled) setEvening({ state: "error" });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authMode, authToken]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(max-width: 820px)");
@@ -720,6 +769,7 @@ export default function Home() {
               reviewEnabled={reviewEnabled}
               onToggleReview={toggleReviewSchedule}
               onStartReview={startEveningReview}
+              evening={evening}
               pomodoroVisible={showPomodoro}
               onTogglePomodoro={() => setShowPomodoro((visible) => !visible)}
               pomodoro={<PomodoroWidget mode={pomodoroMode} seconds={pomodoroSeconds} isRunning={isPomodoroRunning} onToggle={togglePomodoro} onReset={resetPomodoro} onModeChange={changePomodoroMode} />}
@@ -776,12 +826,13 @@ type TodayHomeProps = {
   reviewEnabled: boolean;
   onToggleReview: () => void;
   onStartReview: () => void;
+  evening: EveningCardState;
   pomodoroVisible: boolean;
   onTogglePomodoro: () => void;
   pomodoro: React.ReactNode;
 };
 
-function TodayHome({ greeting, tasks, doneCount, input, setInput, quickLogRef, onSubmit, onToggleTask, onOpenPlan, assistantReply, isAgentBusy, reviewEnabled, onToggleReview, onStartReview, pomodoroVisible, onTogglePomodoro, pomodoro }: TodayHomeProps) {
+function TodayHome({ greeting, tasks, doneCount, input, setInput, quickLogRef, onSubmit, onToggleTask, onOpenPlan, assistantReply, isAgentBusy, reviewEnabled, onToggleReview, onStartReview, evening, pomodoroVisible, onTogglePomodoro, pomodoro }: TodayHomeProps) {
   const visibleTasks = tasks.slice(0, 4);
   return <div className="home-command-center">
     <section className="home-intro">
@@ -816,7 +867,17 @@ function TodayHome({ greeting, tasks, doneCount, input, setInput, quickLogRef, o
         {pomodoroVisible && <div className="home-pomodoro-slot">{pomodoro}</div>}
       </div>
 
-      <aside className="home-review-card"><div className="home-section-head"><div><span className="eyebrow">EVENING REVIEW</span><h2>每日收束</h2></div><BedDouble size={18} className="panel-icon" /></div><p>AI 会在晚上问你一个问题：今天什么值得保留？把行动变成明天能用的经验。</p><div className="review-time-row"><strong>21:30</strong><span>每天一次 · 轻提醒</span><button className={`review-toggle ${reviewEnabled ? "is-enabled" : ""}`} aria-pressed={reviewEnabled} onClick={onToggleReview}><span />{reviewEnabled ? "已开启" : "已关闭"}</button></div><button className="review-start-button" onClick={onStartReview}>现在开始回顾 <ArrowUpRight size={15} /></button></aside>
+      <aside className="home-review-card"><div className="home-section-head"><div><span className="eyebrow">EVENING REVIEW</span><h2>每日收束</h2></div><BedDouble size={18} className="panel-icon" /></div>
+        {evening.state === "ready" && evening.summary ? (
+          <>
+            <p className="evening-summary-preview">{evening.summary.length > 120 ? `${evening.summary.slice(0, 120)}…` : evening.summary}</p>
+            <div className="review-time-row"><strong>今日晚报</strong><span>服务端已生成 · 三问待你回答</span></div>
+          </>
+        ) : (
+          <p>{evening.state === "loading" ? "正在加载今日晚报…" : evening.state === "generating" ? "AI 正在把今天的记录收束成晚报…" : evening.state === "error" ? "今日晚报生成失败，可以稍后手动回顾。" : "AI 会在晚上把今天的记录收束成三问。白天记录，晚上回答。"}</p>
+        )}
+        {evening.state === "no-report" && <div className="review-time-row"><strong>21:30</strong><span>每天一次 · 轻提醒</span><button className={`review-toggle ${reviewEnabled ? "is-enabled" : ""}`} aria-pressed={reviewEnabled} onClick={onToggleReview}><span />{reviewEnabled ? "已开启" : "已关闭"}</button></div>}
+        <button className="review-start-button" onClick={onStartReview}>现在开始回顾 <ArrowUpRight size={15} /></button></aside>
     </section>
 
     <div className="home-trust-line"><span><Sparkles size={13} /> AI 只在需要时出现</span><span>计划、成长和账本会在你需要时展开</span><button className="text-button" onClick={onOpenPlan}>打开计划地图 <ChevronRight size={14} /></button></div>
