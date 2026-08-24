@@ -1,11 +1,13 @@
-import { runAgent } from "@/lib/agent/provider";
-import { getReportByDate, listRecordsByDate, upsertTodayReport, type DbEveningReport } from "@/lib/repo/evening";
-import type { DbRecord } from "@/lib/repo/types";
+import { generateEveningDigest, type EveningContent } from "@/lib/agent/evening-generator";
+import { getReportByDate, upsertTodayReport, type DbEveningReport } from "@/lib/repo/evening";
 import { ServiceError } from "./errors";
+import { buildAgentContext, contextToText, type AgentContext } from "./context";
+import { todayInShanghai } from "./time";
 
 /**
- * 每日晚间晚报业务服务。
- * 生成链路：拉当天记录 → summarizeRecords（纯函数，不调 LLM）→ Agent(review) → 规则回退 → 存库。
+ * 每日晚间晚报业务服务（Phase 2 改造）。
+ * 生成链路：buildAgentContext（目标/任务/记录/7 天统计/最近晚报）→ contextToText → generateEveningDigest
+ *           （LLM JSON 结构化输出，失败规则回退）→ 幂等落库 {summary, content}。
  * 幂等：UNIQUE(user_id, report_date) 由数据库保证，重复/并发生成只有一行。
  */
 
@@ -15,56 +17,24 @@ const EVENING_QUESTIONS = [
   "明天要延续的最小一步是什么？",
 ];
 
-/** 服务端统一时区：上海时区的今天，格式 YYYY-MM-DD（不依赖服务器本地时区） */
-export function todayInShanghai(): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")}`;
-}
-
-const KIND_LABEL: Record<string, string> = {
-  focus: "专注",
-  learn: "学习",
-  exercise: "运动",
-  life: "生活",
-  rest: "休息",
-};
-
-/**
- * summarizeRecords —— 纯函数，职责只有分组/截断/格式化。
- * 不做 LLM、不做复杂推理，输出稳定、token 可控的摘要文本，Agent 再基于它生成晚报。
- */
-export function summarizeRecords(records: DbRecord[]): string {
-  if (records.length === 0) {
-    return "今天还没有留下任何记录。";
-  }
-
-  const byKind = new Map<string, string[]>();
-  for (const record of records) {
-    const kind = record.kind ?? "focus";
-    const label = KIND_LABEL[kind] ?? "其他";
-    const topic = record.topic || record.text;
-    const line = topic.length > 40 ? `${topic.slice(0, 40)}…` : topic;
-    if (!byKind.has(label)) byKind.set(label, []);
-    byKind.get(label)!.push(line);
-  }
-
-  const minutes = records.reduce((sum, r) => sum + (r.minutes ?? 0), 0);
-  const lines: string[] = [];
-  for (const [kind, items] of byKind) {
-    lines.push(`${kind}：`);
-    for (const item of items.slice(0, 8)) lines.push(`- ${item}`);
-  }
-
-  return [
-    `今日记录摘要（共 ${records.length} 条${minutes > 0 ? `，约 ${minutes} 分钟` : ""}）：`,
-    ...lines,
-  ].join("\n");
+/** 规则回退内容（基于真实 context 构造，LLM 不可用时用户仍获得结构化完整晚报） */
+export function ruleFallbackContent(ctx: AgentContext): EveningContent {
+  const achievements = ctx.todayRecords
+    .map((r) => r.topic || r.text)
+    .map((t) => (t.length > 40 ? `${t.slice(0, 40)}…` : t))
+    .filter(Boolean)
+    .slice(0, 3);
+  const w = ctx.weeklyStats;
+  return {
+    summary:
+      ctx.todayRecords.length === 0
+        ? "今天还没有留下任何记录。"
+        : `今天记录了 ${ctx.todayRecords.length} 条行动，完成 ${w.todayDone}/${w.todayTotal} 个任务。`,
+    achievement: achievements,
+    problem: [],
+    suggestion: ["从一件 10 分钟能完成的小事开始明天"],
+    evaluation: `近 7 天完成任务 ${w.doneTasks7d} 个（完成率 ${w.completionRate7d}%），连续记录 ${w.activeDays} 天。`,
+  };
 }
 
 export type EveningReportResult = {
@@ -75,32 +45,23 @@ export type EveningReportResult = {
 /** 生成（或覆盖更新）用户今日晚报；已存在时返回现有报告并 created=false */
 export async function generateEveningReport(userId: string): Promise<EveningReportResult> {
   const reportDate = todayInShanghai();
-  const records = await listRecordsByDate(userId, reportDate);
-  const digest = summarizeRecords(records);
+  const context = await buildAgentContext(userId);
+  const contextText = contextToText(context);
+  const fallback = ruleFallbackContent(context);
 
-  let summary: string;
-  try {
-    const result = await runAgent("今晚回顾", {
-      conversationId: `evening:${userId}:${reportDate}`,
-      context: digest,
-    });
-    if (result.replySource === "llm") {
-      summary = result.reply;
-    } else {
-      // 规则回退：摘要 + 三问引导，用户仍然获得完整晚报体验
-      summary = `${digest}\n\n${result.reply}`;
-    }
-  } catch (error) {
-    console.error("[service/evening] agent failed", error);
-    summary = `${digest}\n\n晚报开始：我会把今天的记录合在一起，依次问你——最重要的行动、真正理解或应用的地方、明天的最小一步。`;
+  const { content, replySource } = await generateEveningDigest(contextText, fallback);
+  if (replySource === "rules") {
+    // 规则回退时在 summary 里保留完整上下文，用户仍能看到今天发生了什么
+    content.summary = `${fallback.summary}\n\n${contextText}`;
   }
 
   const { report, inserted } = await upsertTodayReport({
     userId,
     reportDate,
-    summary,
+    summary: content.summary,
     questions: EVENING_QUESTIONS,
-    sourceCount: records.length,
+    sourceCount: context.todayRecords.length,
+    content,
   });
 
   return { report, created: inserted };

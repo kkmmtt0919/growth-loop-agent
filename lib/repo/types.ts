@@ -25,6 +25,8 @@ export type DbGoal = {
   progress: number;
   horizon: string;
   status: "进行中" | "待复盘" | "已归档";
+  start_date: string | null;
+  end_date: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -42,6 +44,10 @@ export type DbTask = {
   status: "done" | "current" | "upcoming";
   kind: "focus" | "learn" | "exercise" | "life" | "rest";
   version: number;
+  deadline: string | null;
+  frequency: string | null;
+  /** 最后完成时间（MVP 记录最后完成时间，不代表历史完成轨迹） */
+  completed_at: string | null;
   created_at: string;
   updated_at: string;
 };

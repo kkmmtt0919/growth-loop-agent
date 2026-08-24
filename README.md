@@ -9,10 +9,11 @@
 | 能力 | 当前实现 | 入口 |
 |---|---|---|
 | 账号与持久化 | 邮箱/密码注册登录、目标/任务/记录/账本 PostgreSQL 持久化、多用户隔离、幂等入账 | `/api/auth/*`、`/api/tasks` |
+| 计划地图 | 目标/任务真实 CRUD（派生进度、防重复、删除语义、移动端查看+完成） | `/api/goals`、`/api/tasks` |
 | AI 今日对话 | 记录事实、识别意图、给出下一步；无模型配置时使用规则回退 | `/api/agent`、首页 |
 | 学习闭环 | 学习记录 → 生成 2–3 道理解题 → LLM 或规则评分 → XP 回写 | `/api/quiz`、记录页 |
 | 今日行动 | 计划、待办、学习/运动/生活/休息分类、XP 与积分结算 | `/api/demo`、首页/计划 |
-| 晚间回顾 | 统一总结当天记录，并依次追问最重要行动、真正理解和明日一步 | 首页晚报入口、Agent `review` 意图 |
+| 晚间回顾 | Agent Context（目标/任务/记录/7 天统计）→ 结构化晚报（达成/阻碍/建议/评价）；21:30 服务端自动调度（`REPORT_TIME` 可配置） | `/api/evening-report`、首页晚报卡 |
 | 微信入口 | 微信公众号首次验证、明文 XML 文本回调、签名校验、LLM 超时回退 | `/api/wechat` |
 | Android App | 独立移动壳 v4；首页一屏 AI 会面，不堆功能、不产生首页纵向滚动 | `android/`、APK |
 | 可复现调试 | doctor、build、install、run、smoke、logs；面向人和 AI | `scripts/debug-apk.ps1` |

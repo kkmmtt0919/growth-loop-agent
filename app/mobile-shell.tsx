@@ -45,6 +45,7 @@ type MobileAppShellProps = {
   activeTab: MobileTab;
   onNavigate: (tab: MobileTab) => void;
   tasks: Task[];
+  goals: Goal[];
   logs: MobileLiveLog[];
   doneCount: number;
   earnedCoins: number;
@@ -52,12 +53,13 @@ type MobileAppShellProps = {
   setInput: Dispatch<SetStateAction<string>>;
   onSubmit: () => void;
   onToggleTask: (id: string) => void;
-  onSplitGoal: (goal: Goal) => void;
+  onAgentGoal: () => void;
   assistantReply: string;
   isAgentBusy: boolean;
   reviewEnabled: boolean;
   onToggleReview: () => void;
   onStartReview: () => void;
+  eveningTime?: string;
   isFocusRunning: boolean;
   onToggleFocus: () => void;
   toast: string;
@@ -74,6 +76,7 @@ export default function MobileAppShell({
   activeTab,
   onNavigate,
   tasks,
+  goals,
   logs,
   doneCount,
   earnedCoins,
@@ -81,12 +84,13 @@ export default function MobileAppShell({
   setInput,
   onSubmit,
   onToggleTask,
-  onSplitGoal,
+  onAgentGoal,
   assistantReply,
   isAgentBusy,
   reviewEnabled,
   onToggleReview,
   onStartReview,
+  eveningTime,
   isFocusRunning,
   onToggleFocus,
   toast,
@@ -135,6 +139,7 @@ export default function MobileAppShell({
             reviewEnabled={reviewEnabled}
             onToggleReview={onToggleReview}
             onStartReview={onStartReview}
+            eveningTime={eveningTime}
             isFocusRunning={isFocusRunning}
             onToggleFocus={onToggleFocus}
           />
@@ -142,9 +147,10 @@ export default function MobileAppShell({
         {activeTab === "计划" && (
           <MobilePlanV3
             tasks={tasks}
+            goals={goals}
             doneCount={doneCount}
             onToggleTask={onToggleTask}
-            onSplitGoal={onSplitGoal}
+            onAgentGoal={onAgentGoal}
             onToggleFocus={onToggleFocus}
             isFocusRunning={isFocusRunning}
           />
@@ -194,6 +200,7 @@ function MobileTodayV4({
   reviewEnabled,
   onToggleReview,
   onStartReview,
+  eveningTime,
   isFocusRunning,
   onToggleFocus,
 }: {
@@ -208,6 +215,7 @@ function MobileTodayV4({
   reviewEnabled: boolean;
   onToggleReview: () => void;
   onStartReview: () => void;
+  eveningTime?: string;
   isFocusRunning: boolean;
   onToggleFocus: () => void;
 }) {
@@ -240,7 +248,7 @@ function MobileTodayV4({
       </section>
 
       <section className="app-mobile-v4-links" aria-label="AI 自动安排">
-        <button className="app-mobile-v4-review-link" onClick={onStartReview}><Moon size={14} /><span>{reviewEnabled ? "今晚 21:30，AI 会来做晚报" : "晚报未开启，点这里交给 AI"}</span><ArrowRight size={13} /></button>
+        <button className="app-mobile-v4-review-link" onClick={onStartReview}><Moon size={14} /><span>{reviewEnabled ? `今晚 ${eveningTime ?? "21:30"}，AI 会来做晚报` : "晚报未开启，点这里交给 AI"}</span><ArrowRight size={13} /></button>
         <div className="app-mobile-v4-progress-link"><button onClick={() => onNavigate("计划")}><span>{doneCount}/{tasks.length} 个下一步完成</span><ChevronRight size={14} /></button><button className={`app-mobile-v4-review-toggle ${reviewEnabled ? "is-on" : ""}`} onClick={onToggleReview} aria-pressed={reviewEnabled}><i />{reviewEnabled ? "已安排" : "安排"}</button></div>
       </section>
     </div>
@@ -257,20 +265,29 @@ function MobileTaskV3({ task, onToggle }: { task: Task; onToggle: (id: string) =
   );
 }
 
-function MobilePlanV3({ tasks, doneCount, onToggleTask, onSplitGoal, onToggleFocus, isFocusRunning }: { tasks: Task[]; doneCount: number; onToggleTask: (id: string) => void; onSplitGoal: (goal: Goal) => void; onToggleFocus: () => void; isFocusRunning: boolean }) {
-  const goal = demoSeed.goals[0];
+function MobilePlanV3({ tasks, goals, doneCount, onToggleTask, onAgentGoal, onToggleFocus, isFocusRunning }: { tasks: Task[]; goals: Goal[]; doneCount: number; onToggleTask: (id: string) => void; onAgentGoal: () => void; onToggleFocus: () => void; isFocusRunning: boolean }) {
+  const goal = goals[0];
   return (
     <div className="app-mobile-v3-page app-mobile-v3-subpage">
       <section className="app-mobile-v3-page-title"><span className="app-mobile-v3-label">ROADMAP</span><h1>把目标放到今天。</h1><p>路线不是待办清单，它只需要告诉你下一步往哪里走。</p></section>
+      {goal ? (
       <section className="app-mobile-v3-goal-card">
-        <div className="app-mobile-v3-goal-head"><span>进行中 · {goal.horizon}</span><Target size={17} /></div>
-        <h2>{goal.title}</h2><p>{goal.description}</p>
+        <div className="app-mobile-v3-goal-head"><span>{goal.status} · {goal.horizon || "未设周期"}</span><Target size={17} /></div>
+        <h2>{goal.title}</h2><p>{goal.description || "还没有描述"}</p>
         <div className="app-mobile-v3-goal-track"><b style={{ width: `${goal.progress}%` }} /></div>
         <div className="app-mobile-v3-goal-foot"><span>当前进度</span><strong>{goal.progress}%</strong></div>
       </section>
+      ) : (
+      <section className="app-mobile-v3-goal-card">
+        <div className="app-mobile-v3-goal-head"><span>进行中</span><Target size={17} /></div>
+        <h2>还没有目标</h2><p>先在电脑上创建一个目标，这里会显示你的真实路线。</p>
+        <div className="app-mobile-v3-goal-track"><b style={{ width: "0%" }} /></div>
+        <div className="app-mobile-v3-goal-foot"><span>当前进度</span><strong>0%</strong></div>
+      </section>
+      )}
       <section className="app-mobile-v3-route-card">
         <div className="app-mobile-v3-block-heading"><div><span className="app-mobile-v3-label">AI ROUTE</span><h2>Agent 学习路线</h2></div><Sparkles size={17} /></div>
-        <div className="app-mobile-v3-route-step is-current"><div className="app-mobile-v3-route-index">01</div><div><strong>定义问题与验收标准</strong><p>把一个真实问题做成可观察的最小闭环。</p></div><button onClick={() => onSplitGoal({ id: "goal-ai-agent", title: "学习 Agent 并开发自己的 Agent", description: "从一个具体问题做出最小可运行闭环", progress: 0, horizon: "今日路线", status: "进行中" })} aria-label="添加今天的行动"><Plus size={15} /></button></div>
+        <div className="app-mobile-v3-route-step is-current"><div className="app-mobile-v3-route-index">01</div><div><strong>定义问题与验收标准</strong><p>把一个真实问题做成可观察的最小闭环。</p></div><button onClick={onAgentGoal} aria-label="添加今天的行动"><Plus size={15} /></button></div>
         <div className="app-mobile-v3-route-step"><div className="app-mobile-v3-route-index">02</div><div><strong>连接工具与状态</strong><p>让 Agent 能够完成一次真实动作。</p></div><CircleCheck size={16} /></div>
         <div className="app-mobile-v3-route-step"><div className="app-mobile-v3-route-index">03</div><div><strong>跑通一次对话闭环</strong><p>从输入、判断到结果，留下可验证证据。</p></div><CircleCheck size={16} /></div>
       </section>

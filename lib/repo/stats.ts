@@ -83,3 +83,34 @@ export async function listFocusGoals(userId: string, limit = 3): Promise<DbGoal[
   );
   return rows;
 }
+
+/** 某用户自某时间点起完成的任务数（Phase 2 Context：completed_at 口径） */
+export async function countDoneTasksSince(userId: string, sinceDate: string): Promise<number> {
+  const { rows } = await getPool().query<{ count: string }>(
+    `select count(*)::text as count from public.tasks
+     where user_id = $1 and status = 'done' and completed_at is not null
+       and (completed_at at time zone 'Asia/Shanghai')::date >= $2`,
+    [userId, sinceDate],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** 某用户今日完成的任务数（completed_at 落在今天） */
+export async function countDoneTasksOnDay(userId: string, shanghaiDate: string): Promise<number> {
+  const { rows } = await getPool().query<{ count: string }>(
+    `select count(*)::text as count from public.tasks
+     where user_id = $1 and status = 'done' and completed_at is not null
+       and (completed_at at time zone 'Asia/Shanghai')::date = $2`,
+    [userId, shanghaiDate],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** 某用户当前任务总数 */
+export async function countTasks(userId: string): Promise<number> {
+  const { rows } = await getPool().query<{ count: string }>(
+    `select count(*)::text as count from public.tasks where user_id = $1`,
+    [userId],
+  );
+  return Number(rows[0]?.count ?? 0);
+}

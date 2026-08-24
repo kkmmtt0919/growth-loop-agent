@@ -14,6 +14,8 @@ export type DbEveningReport = {
   summary: string;
   questions: unknown;
   source_count: number;
+  /** 结构化内容 { summary, achievement[], problem[], suggestion[], evaluation }（Phase 2 起） */
+  content: Record<string, unknown> | null;
   created_at: string;
   generated_at: string;
 };
@@ -24,6 +26,7 @@ export type UpsertEveningReportInput = {
   summary: string;
   questions: unknown;
   sourceCount: number;
+  content?: Record<string, unknown> | null;
 };
 
 /** 查询某用户某天的记录（occurred_at 按 Asia/Shanghai 转换后匹配日期） */
@@ -46,16 +49,17 @@ export async function upsertTodayReport(
   input: UpsertEveningReportInput,
 ): Promise<{ report: DbEveningReport; inserted: boolean }> {
   const { rows } = await getPool().query<DbEveningReport & { inserted: boolean }>(
-    `insert into public.evening_reports (user_id, report_date, summary, questions, source_count, generated_at)
-     values ($1, $2, $3, $4, $5, now())
+    `insert into public.evening_reports (user_id, report_date, summary, questions, source_count, content, generated_at)
+     values ($1, $2, $3, $4, $5, $6, now())
      on conflict (user_id, report_date)
      do update set
        summary = excluded.summary,
        questions = excluded.questions,
        source_count = excluded.source_count,
+       content = excluded.content,
        generated_at = now()
-     returning id, user_id, report_date::text as report_date, summary, questions, source_count, created_at, generated_at, (xmax = 0) as inserted`,
-    [input.userId, input.reportDate, input.summary, JSON.stringify(input.questions), input.sourceCount],
+     returning id, user_id, report_date::text as report_date, summary, questions, source_count, content, created_at, generated_at, (xmax = 0) as inserted`,
+    [input.userId, input.reportDate, input.summary, JSON.stringify(input.questions), input.sourceCount, input.content ? JSON.stringify(input.content) : null],
   );
   const row = rows[0];
   const { inserted, ...report } = row;
@@ -65,11 +69,24 @@ export async function upsertTodayReport(
 /** 查询某用户某天的晚报（不存在返回 null） */
 export async function getReportByDate(userId: string, reportDate: string): Promise<DbEveningReport | null> {
   const { rows } = await getPool().query<DbEveningReport>(
-    `select id, user_id, report_date::text as report_date, summary, questions, source_count, created_at, generated_at
+    `select id, user_id, report_date::text as report_date, summary, questions, source_count, content, created_at, generated_at
      from public.evening_reports
      where user_id = $1 and report_date = $2
      limit 1`,
     [userId, reportDate],
+  );
+  return rows[0] ?? null;
+}
+
+/** 查询最近一条晚报（Phase 2 Context 用；按 report_date 倒序取最近一条） */
+export async function getLatestReport(userId: string): Promise<DbEveningReport | null> {
+  const { rows } = await getPool().query<DbEveningReport>(
+    `select id, user_id, report_date::text as report_date, summary, questions, source_count, content, created_at, generated_at
+     from public.evening_reports
+     where user_id = $1
+     order by report_date desc
+     limit 1`,
+    [userId],
   );
   return rows[0] ?? null;
 }

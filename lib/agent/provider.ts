@@ -34,7 +34,8 @@ function firstEnv(...keys: string[]) {
   return keys.map((key) => process.env[key]?.trim()).find(Boolean);
 }
 
-function readConfig(): LlmConfig {
+/** LLM 配置读取（供对话 Agent 与晚报结构化生成共用） */
+export function readConfig(): LlmConfig {
   const provider = firstEnv("LLM_PROVIDER", "LLM_PROFILE") ?? "demo";
   const normalizedProvider = provider.toLowerCase();
 

@@ -35,3 +35,9 @@ export async function findById(id: string): Promise<DbProfile | null> {
   );
   return rows[0] ?? null;
 }
+
+/** 全部用户 id（Phase 3 晚报调度：遍历生成，幂等跳过已生成的） */
+export async function listUserIds(): Promise<string[]> {
+  const { rows } = await getPool().query<{ id: string }>(`select id from public.profiles order by created_at asc`);
+  return rows.map((r) => r.id);
+}

@@ -23,6 +23,7 @@ export async function GET(request: Request) {
         summary: report.summary,
         questions: report.questions,
         sourceCount: report.source_count,
+        content: report.content,
         generatedAt: report.generated_at,
       },
     });

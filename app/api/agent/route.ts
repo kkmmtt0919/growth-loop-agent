@@ -4,13 +4,17 @@ import { authenticate, AuthError } from "@/lib/auth/middleware";
 import { createRecordWithReward, updateRecord } from "@/lib/service/workspace";
 import { ServiceError } from "@/lib/service/errors";
 import { isDatabaseConfigured } from "@/lib/repo/pool";
+import { readReportTime } from "@/lib/service/time";
 
 export const runtime = "nodejs";
 
 export async function GET() {
-  return NextResponse.json(getAgentStatus(), {
-    headers: { "Cache-Control": "no-store" },
-  });
+  return NextResponse.json(
+    { ...getAgentStatus(), eveningReportTime: readReportTime() },
+    {
+      headers: { "Cache-Control": "no-store" },
+    },
+  );
 }
 
 function errorResponse(error: string, status = 400) {

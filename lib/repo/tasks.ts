@@ -63,11 +63,12 @@ export async function toggleTask(
 
     const nextStatus: DbTask["status"] = done ? "done" : "upcoming";
     // version+1：每次状态切换都拿到新版本号，账本 key 带版本，互不冲突
+    // completed_at：MVP 记录「最后完成时间」（done → now()，undo → null），账本逻辑零改动
     const { rows: updatedRows } = await client.query<DbTask>(
-      `update public.tasks set status = $3, version = version + 1
+      `update public.tasks set status = $3, version = version + 1, completed_at = $4
        where id = $1 and user_id = $2
        returning *`,
-      [taskId, userId, nextStatus],
+      [taskId, userId, nextStatus, done ? new Date() : null],
     );
     const updated = updatedRows[0];
     const version = updated.version;
@@ -115,4 +116,132 @@ async function applyLedgerInTx(
       [userId, amount],
     );
   }
+}
+
+/* =============================================================
+ * Phase 1 扩展：任务 CRUD（元数据层，不触碰账本）
+ * 红线：所有查询显式带 user_id；按 id 操作 id + user_id 双条件。
+ * 规则：createTask/updateTask 不写 xp/coin；状态变更只走 toggleTask（PATCH）。
+ * ============================================================= */
+
+const TASK_SELECT = `id, user_id, goal_id, title, subtitle, scheduled_time, duration_minutes, xp, coin,
+  status, kind, version, deadline::text as deadline, frequency, completed_at, created_at, updated_at`;
+
+export type CreateTaskInput = {
+  title: string;
+  goalId?: string | null;
+  subtitle?: string;
+  scheduledTime?: string;
+  durationMinutes?: number | null;
+  deadline?: string | null;
+  frequency?: string | null;
+  kind?: DbTask["kind"];
+  xp?: number;
+  coin?: number;
+};
+
+/** 创建任务（status 默认 upcoming；xp/coin 默认 0） */
+export async function createTask(userId: string, input: CreateTaskInput): Promise<DbTask> {
+  const { rows } = await getPool().query<DbTask>(
+    `insert into public.tasks
+       (user_id, goal_id, title, subtitle, scheduled_time, duration_minutes, deadline, frequency, kind, xp, coin, status)
+     values ($1, $2, $3, $4, $5, $6, $7::date, $8, $9, $10, $11, 'upcoming')
+     returning ${TASK_SELECT}`,
+    [
+      userId,
+      input.goalId ?? null,
+      input.title,
+      input.subtitle ?? "",
+      input.scheduledTime ?? "",
+      input.durationMinutes ?? null,
+      input.deadline ?? null,
+      input.frequency ?? null,
+      input.kind ?? "focus",
+      input.xp ?? 0,
+      input.coin ?? 0,
+    ],
+  );
+  return rows[0];
+}
+
+/** 查询任务（可选按 goalId / status 过滤），按 scheduled_time 升序 */
+export async function listTasksByFilter(
+  userId: string,
+  filter: { goalId?: string | null; status?: DbTask["status"] } = {},
+): Promise<DbTask[]> {
+  const conditions = ["user_id = $1"];
+  const params: unknown[] = [userId];
+  if (filter.goalId !== undefined && filter.goalId !== null) {
+    params.push(filter.goalId);
+    conditions.push(`goal_id = $${params.length}`);
+  }
+  if (filter.status !== undefined && filter.status !== null) {
+    params.push(filter.status);
+    conditions.push(`status = $${params.length}`);
+  }
+  const { rows } = await getPool().query<DbTask>(
+    `select ${TASK_SELECT} from public.tasks where ${conditions.join(" and ")} order by scheduled_time asc`,
+    params,
+  );
+  return rows;
+}
+
+export type UpdateTaskInput = {
+  title?: string;
+  subtitle?: string;
+  scheduledTime?: string;
+  durationMinutes?: number | null;
+  deadline?: string | null;
+  frequency?: string | null;
+  kind?: DbTask["kind"];
+  goalId?: string | null;
+};
+
+/**
+ * 更新任务元数据。
+ * 硬规则：不接受 xp/coin/status（防绕过账本与状态机）——Service 层白名单保证；
+ * status 变更必须走 toggleTask。
+ */
+export async function updateTask(userId: string, taskId: string, input: UpdateTaskInput): Promise<DbTask | null> {
+  const { rows } = await getPool().query<DbTask>(
+    `update public.tasks set
+       title = coalesce($3, title),
+       subtitle = coalesce($4, subtitle),
+       scheduled_time = coalesce($5, scheduled_time),
+       duration_minutes = coalesce($6, duration_minutes),
+       deadline = coalesce($7::date, deadline),
+       frequency = coalesce($8, frequency),
+       kind = coalesce($9, kind),
+       goal_id = coalesce($10, goal_id)
+     where id = $1 and user_id = $2
+     returning ${TASK_SELECT}`,
+    [
+      taskId,
+      userId,
+      input.title ?? null,
+      input.subtitle ?? null,
+      input.scheduledTime ?? null,
+      input.durationMinutes === undefined ? null : input.durationMinutes,
+      input.deadline === undefined ? null : input.deadline,
+      input.frequency === undefined ? null : input.frequency,
+      input.kind ?? null,
+      input.goalId === undefined ? null : input.goalId,
+    ],
+  );
+  return rows[0] ?? null;
+}
+
+/** 删除任务（不冲正账本：产品设计 §6.5「删除任务不扣分」） */
+export async function deleteTask(userId: string, taskId: string): Promise<boolean> {
+  const { rowCount } = await getPool().query(`delete from public.tasks where id = $1 and user_id = $2`, [taskId, userId]);
+  return (rowCount ?? 0) > 0;
+}
+
+/** 按 id 取单个任务（user 隔离；跨用户返回 null） */
+export async function getTask(userId: string, taskId: string): Promise<DbTask | null> {
+  const { rows } = await getPool().query<DbTask>(
+    `select ${TASK_SELECT} from public.tasks where id = $1 and user_id = $2 limit 1`,
+    [taskId, userId],
+  );
+  return rows[0] ?? null;
 }

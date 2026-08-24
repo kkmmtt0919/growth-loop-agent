@@ -10,7 +10,7 @@ import {
   listRecordDates,
 } from "@/lib/repo/stats";
 import type { DbGoal } from "@/lib/repo/types";
-import { todayInShanghai } from "./evening";
+import { todayInShanghai } from "./time";
 import { ServiceError } from "./errors";
 
 /**

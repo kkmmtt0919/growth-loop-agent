@@ -37,6 +37,7 @@ export async function POST(request: Request) {
         summary: report.summary,
         questions: report.questions,
         sourceCount: report.source_count,
+        content: report.content,
       },
     });
   } catch (error) {

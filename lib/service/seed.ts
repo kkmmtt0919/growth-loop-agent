@@ -72,6 +72,7 @@ export function mapTaskToSeedTask(task: DbTask): (typeof demoSeed.tasks)[number]
     coin: task.coin,
     status: task.status,
     kind: task.kind,
+    completedAt: task.completed_at ?? null,
   };
 }
 

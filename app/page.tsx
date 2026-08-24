@@ -74,8 +74,6 @@ const LOG_EVENT = "growth-loop:logs";
 const EMPTY_LOGS: LogEntry[] = [];
 const POMODORO_FOCUS_SECONDS = 25 * 60;
 const POMODORO_BREAK_SECONDS = 5 * 60;
-const EVENING_REVIEW_HOUR = 21;
-const EVENING_REVIEW_MINUTE = 30;
 let logSnapshot: { raw: string; value: LogEntry[] } = { raw: "", value: EMPTY_LOGS };
 
 /**
@@ -97,12 +95,20 @@ function applyWorkspaceData(data: typeof demoSeed) {
 
 type AuthMode = "loading" | "demo" | "login" | "ready";
 
+/** 计划页真实目标：API 返回的派生 taskCount/doneCount 与业务日期附加在 demo Goal 形状上 */
+type PlanGoal = Goal & { taskCount?: number; doneCount?: number; startDate?: string; endDate?: string };
+
+/** 目标创建/编辑入参（与 /api/goals 契约对齐） */
+type GoalInput = { title: string; description?: string; startDate?: string; endDate?: string; horizon?: string };
+
 /** 晚报卡片单状态驱动（杜绝 loading+error 等非法组合） */
 type EveningState = "loading" | "no-report" | "generating" | "ready" | "error";
 
 type EveningCardState = {
   state: EveningState;
   summary?: string;
+  /** 结构化晚报内容（Phase 2 起：summary/achievement/problem/suggestion/evaluation） */
+  content?: Record<string, unknown> | null;
 };
 
 /** 数据库记录 -> 前端 LogEntry（保存后即时回显用） */
@@ -195,7 +201,8 @@ export default function Home() {
   const [isRemindersPaused, setIsRemindersPaused] = useState(false);
   const [reviewEnabled, setReviewEnabled] = useState(true);
   const [toast, setToast] = useState("");
-  const [assistantReply, setAssistantReply] = useState("把今天发生的事直接写给我就好。白天我先帮你收好记录，晚上 21:30 再把今天几条记录合在一起，统一问你最重要的一步、真正理解的地方和明天的行动。" );
+  const [eveningTime, setEveningTime] = useState("21:30");
+  const [assistantReply, setAssistantReply] = useState(`把今天发生的事直接写给我就好。白天我先帮你收好记录，晚上 ${eveningTime} 再把今天几条记录合在一起，统一问你最重要的一步、真正理解的地方和明天的行动。` );
   const [isAgentBusy, setIsAgentBusy] = useState(false);
   const [isMobileExperience, setIsMobileExperience] = useState(false);
   const [activeQuiz, setActiveQuiz] = useState<QuizSession | null>(null);
@@ -217,6 +224,8 @@ export default function Home() {
   const [dashboardStats, setDashboardStats] = useState<{ profile?: { streak?: number; nickname?: string; level?: number; xp?: number; nextLevelXp?: number; coin?: number }; todayTasks?: Task[]; todayRecords?: number } | null>(null);
   const [growthStats, setGrowthStats] = useState<{ weeklyMinutes?: Array<{ day: string; value: number; label: string }>; evidence?: { input: number; understanding: number; application: number }; activeDays?: number } | null>(null);
   const [focusGoals, setFocusGoals] = useState<Goal[] | null>(null);
+  // 计划页真实目标：初始用 demoSeed 回退（原型模式），ready 后由 GET /api/goals 覆盖
+  const [goals, setGoals] = useState<PlanGoal[]>(demoSeed.goals);
 
   useEffect(() => {
     const storedSessionId = window.localStorage.getItem(SESSION_STORAGE_KEY) || `session-${Date.now()}`;
@@ -267,7 +276,7 @@ export default function Home() {
     };
   }, []);
 
-  // 晚报懒触发：ready 模式下查今日晚报；已过 21:30 且未生成则自动生成（服务端幂等）
+  // 晚报懒触发：ready 模式下查今日晚报；已过 eveningTime 且未生成则自动生成（服务端幂等）
   useEffect(() => {
     if (authMode !== "ready" || !authToken) return;
     let cancelled = false;
@@ -276,14 +285,15 @@ export default function Home() {
       try {
         const res = await fetch("/api/evening-report/today", { headers });
         if (!res.ok) throw new Error("evening unavailable");
-        const { report } = (await res.json()) as { report?: { summary: string } | null };
+        const { report } = (await res.json()) as { report?: { summary: string; content?: Record<string, unknown> | null } | null };
         if (cancelled) return;
         if (report) {
-          setEvening({ state: "ready", summary: report.summary });
+          setEvening({ state: "ready", summary: report.summary, content: report.content ?? null });
           return;
         }
         const now = new Date();
-        const reached = now.getHours() > EVENING_REVIEW_HOUR || (now.getHours() === EVENING_REVIEW_HOUR && now.getMinutes() >= EVENING_REVIEW_MINUTE);
+        const [eh, em] = eveningTime.split(":").map(Number);
+        const reached = now.getHours() > eh || (now.getHours() === eh && now.getMinutes() >= em);
         if (!reached) {
           setEvening({ state: "no-report" });
           return;
@@ -294,9 +304,9 @@ export default function Home() {
           headers: { "Content-Type": "application/json", ...headers },
         });
         if (!gen.ok) throw new Error("evening generate failed");
-        const data = (await gen.json()) as { report?: { summary?: string } };
+        const data = (await gen.json()) as { report?: { summary?: string; content?: Record<string, unknown> | null } };
         if (!cancelled) {
-          setEvening({ state: "ready", summary: data.report?.summary ?? "今日晚报已生成" });
+          setEvening({ state: "ready", summary: data.report?.summary ?? "今日晚报已生成", content: data.report?.content ?? null });
         }
       } catch {
         if (!cancelled) setEvening({ state: "error" });
@@ -305,7 +315,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [authMode, authToken]);
+  }, [authMode, authToken, eveningTime]);
 
   // 聚合数据（真实化）：ready 后拉取 dashboard / growth / goals，供侧边栏/成长页/计划页使用
   useEffect(() => {
@@ -314,15 +324,17 @@ export default function Home() {
     const headers = { Authorization: `Bearer ${authToken}` };
     (async () => {
       try {
-        const [d, g, s] = await Promise.all([
+        const [d, g, s, gl] = await Promise.all([
           fetch("/api/dashboard", { headers }).then((r) => r.json()),
           fetch("/api/growth/stats", { headers }).then((r) => r.json()),
           fetch("/api/goals/summary", { headers }).then((r) => r.json()),
+          fetch("/api/goals", { headers }).then((r) => r.json()),
         ]);
         if (cancelled) return;
         if (d?.profile) setDashboardStats(d);
         if (g?.weeklyMinutes) setGrowthStats(g);
         if (s?.focusGoals) setFocusGoals(s.focusGoals);
+        if (Array.isArray(gl?.goals)) setGoals(gl.goals);
       } catch {
         // 聚合失败不阻塞页面：各面板保持默认/空态
       }
@@ -331,6 +343,21 @@ export default function Home() {
       cancelled = true;
     };
   }, [authMode, authToken]);
+
+  // 晚报时间配置：ready 后从状态接口读取（REPORT_TIME），懒触发与提醒定时器统一用它
+  useEffect(() => {
+    if (authMode !== "ready") return;
+    let cancelled = false;
+    fetch("/api/agent")
+      .then((r) => r.json())
+      .then((s: { eveningReportTime?: string }) => {
+        if (!cancelled && s?.eveningReportTime) setEveningTime(s.eveningReportTime);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [authMode]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(max-width: 820px)");
@@ -354,13 +381,14 @@ export default function Home() {
     const scheduleNextReview = () => {
       const now = new Date();
       const nextReview = new Date(now);
-      nextReview.setHours(EVENING_REVIEW_HOUR, EVENING_REVIEW_MINUTE, 0, 0);
+      const [eh, em] = eveningTime.split(":").map(Number);
+      nextReview.setHours(eh, em, 0, 0);
       if (nextReview.getTime() <= now.getTime()) nextReview.setDate(nextReview.getDate() + 1);
       reviewTimer.current = window.setTimeout(() => {
         setInput((value) => value || "今晚回顾");
         setAssistantReply("到晚间了。我会根据今天的记录统一追问三件事：最重要的行动、真正理解或应用的地方、明天的一步。先从你最想保留的一件事开始。" );
         setActiveTab("今日");
-        notify("21:30 晚间回顾已准备好");
+        notify(`${eveningTime} 晚间回顾已准备好`);
         scheduleNextReview();
       }, Math.max(1_000, nextReview.getTime() - now.getTime()));
     };
@@ -368,7 +396,7 @@ export default function Home() {
     return () => {
       if (reviewTimer.current) window.clearTimeout(reviewTimer.current);
     };
-  }, [reviewEnabled]);
+  }, [reviewEnabled, eveningTime]);
 
   useEffect(() => {
     if (!isPomodoroRunning) return;
@@ -674,7 +702,7 @@ export default function Home() {
     const nextEnabled = !reviewEnabled;
     setReviewEnabled(nextEnabled);
     window.localStorage.setItem(REVIEW_STORAGE_KEY, String(nextEnabled));
-    notify(nextEnabled ? "已开启每日 21:30 晚间回顾" : "已关闭晚间回顾提醒");
+    notify(nextEnabled ? `已开启每日 ${eveningTime} 晚间回顾` : "已关闭晚间回顾提醒");
   }
 
   function startEveningReview() {
@@ -688,24 +716,138 @@ export default function Home() {
     notify("晚间回顾已准备好，写下今天最重要的一件事");
   }
 
+  function apiHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
+    return headers;
+  }
+
+  /** API 目标 → 前端 PlanGoal（保留派生计数与业务日期） */
+  function mapApiGoal(g: Record<string, unknown>): PlanGoal {
+    return {
+      id: String(g.id),
+      title: String(g.title ?? ""),
+      description: String(g.description ?? ""),
+      progress: Number(g.progress ?? 0),
+      horizon: String(g.horizon ?? ""),
+      status: (g.status as Goal["status"]) ?? "进行中",
+      taskCount: Number(g.taskCount ?? 0),
+      doneCount: Number(g.doneCount ?? 0),
+      startDate: g.start_date ? String(g.start_date) : undefined,
+      endDate: g.end_date ? String(g.end_date) : undefined,
+    };
+  }
+
+  function requireAuth() {
+    if (authMode !== "ready") {
+      notify("登录后即可创建目标");
+      return false;
+    }
+    return true;
+  }
+
+  async function createGoal(input: GoalInput) {
+    if (!requireAuth()) return;
+    try {
+      const res = await fetch("/api/goals", { method: "POST", headers: apiHeaders(), body: JSON.stringify(input) });
+      if (!res.ok) throw new Error("create failed");
+      const { goal } = (await res.json()) as { goal: Record<string, unknown> };
+      setGoals((current) => [...current, mapApiGoal(goal)]);
+      notify("目标已创建");
+    } catch {
+      notify("目标创建失败，请重试");
+    }
+  }
+
+  async function updateGoal(id: string, input: GoalInput) {
+    if (!requireAuth()) return;
+    try {
+      const res = await fetch(`/api/goals/${id}`, { method: "PUT", headers: apiHeaders(), body: JSON.stringify(input) });
+      if (!res.ok) throw new Error("update failed");
+      const { goal } = (await res.json()) as { goal: Record<string, unknown> };
+      setGoals((current) => current.map((g) => (g.id === id ? mapApiGoal(goal) : g)));
+      notify("目标已更新");
+    } catch {
+      notify("目标更新失败，请重试");
+    }
+  }
+
+  async function deleteGoal(id: string) {
+    if (!requireAuth()) return;
+    if (!window.confirm("删除目标后，其下任务会保留为独立行动，确定删除？")) return;
+    try {
+      const res = await fetch(`/api/goals/${id}`, { method: "DELETE", headers: apiHeaders() });
+      if (!res.ok) throw new Error("delete failed");
+      setGoals((current) => current.filter((g) => g.id !== id));
+      notify("目标已删除");
+    } catch {
+      notify("目标删除失败，请重试");
+    }
+  }
+
+  /** 新增任务（拆解/路线卡共用）；同目标下同标题已存在时服务端 409，前端也按标题先拦截 */
+  async function addTask(input: { title: string; goalId?: string | null; subtitle?: string; scheduledTime?: string; durationMinutes?: number; kind?: TaskKind }) {
+    if (!requireAuth()) return;
+    if (tasks.some((t) => t.title === input.title)) {
+      notify("这条行动已经在计划里了");
+      return;
+    }
+    try {
+      const res = await fetch("/api/tasks", { method: "POST", headers: apiHeaders(), body: JSON.stringify(input) });
+      if (res.status === 409) {
+        notify("同目标下已存在同名任务");
+        return;
+      }
+      if (!res.ok) throw new Error("create failed");
+      const { task } = (await res.json()) as { task: Task };
+      setTasks((current) => [...current, task]);
+      notify("已加入今日计划");
+    } catch {
+      notify("任务创建失败，请重试");
+    }
+  }
+
   function splitGoal(goal: Goal) {
-    const taskId = `goal-step-${goal.id}`;
-    const isAgentGoal = goal.id === "goal-ai-agent";
-    setTasks((current) => current.some((task) => task.id === taskId) ? current : [
-      ...current,
-      {
-        id: taskId,
-        title: isAgentGoal ? "AI Agent 最小闭环：定义问题与验收" : `从「${goal.title}」拆一步`,
-        subtitle: isAgentGoal ? "写出一个 Agent 要解决的问题，并定义一次可观察的成功结果" : "先完成一个 15 分钟可验证的小动作",
-        time: isAgentGoal ? "今天" : "明天",
-        duration: isAgentGoal ? "45 min" : "15 min",
-        xp: isAgentGoal ? 20 : 5,
-        coin: isAgentGoal ? 8 : 2,
-        status: "upcoming",
-        kind: "focus",
-      },
-    ]);
-    notify(`已把「${goal.title}」拆成一个明天可执行的行动`);
+    void addTask({
+      title: `从「${goal.title}」拆一步`,
+      goalId: goal.id,
+      subtitle: "先完成一个 15 分钟可验证的小动作",
+      scheduledTime: "明天",
+      durationMinutes: 15,
+      kind: "focus",
+    });
+  }
+
+  /** AI Agent 路线卡：库中无该目标则先创建真实 goal，再拆出首个任务（防重复由 addTask/409 兜底） */
+  async function handleAgentGoal() {
+    if (!requireAuth()) return;
+    const existing = goals.find((g) => g.title.includes("学习 Agent"));
+    let goalId = existing?.id ?? null;
+    if (!goalId) {
+      try {
+        const res = await fetch("/api/goals", {
+          method: "POST",
+          headers: apiHeaders(),
+          body: JSON.stringify({ title: "学习 Agent 并开发自己的 Agent", description: "从一个具体问题做出最小可运行闭环", horizon: "今日路线" }),
+        });
+        if (!res.ok) throw new Error("goal create failed");
+        const { goal } = (await res.json()) as { goal: Record<string, unknown> };
+        const mapped = mapApiGoal(goal);
+        setGoals((current) => [...current, mapped]);
+        goalId = mapped.id;
+      } catch {
+        notify("目标创建失败，请重试");
+        return;
+      }
+    }
+    await addTask({
+      title: "AI Agent 最小闭环：定义问题与验收",
+      goalId,
+      subtitle: "写出一个 Agent 要解决的问题，并定义一次可观察的成功结果",
+      scheduledTime: "今天",
+      durationMinutes: 45,
+      kind: "focus",
+    });
   }
 
   if (authMode === "loading") {
@@ -721,6 +863,7 @@ export default function Home() {
       activeTab={activeTab}
       onNavigate={(tab) => setActiveTab(tab)}
       tasks={tasks}
+      goals={goals}
       logs={logs}
       doneCount={doneCount}
       earnedCoins={earnedCoins}
@@ -728,12 +871,13 @@ export default function Home() {
       setInput={setInput}
       onSubmit={submitLog}
       onToggleTask={toggleTask}
-      onSplitGoal={splitGoal}
+      onAgentGoal={handleAgentGoal}
       assistantReply={assistantReply}
       isAgentBusy={isAgentBusy}
       reviewEnabled={reviewEnabled}
       onToggleReview={toggleReviewSchedule}
       onStartReview={startEveningReview}
+      eveningTime={eveningTime}
       isFocusRunning={isFocusRunning}
       onToggleFocus={toggleFocusSession}
       toast={toast}
@@ -786,7 +930,7 @@ export default function Home() {
         <header className="topbar">
           <div className="mobile-brand"><div className="brand-mark"><Sparkles size={15} /></div><span>成长回路</span></div>
           <div className="date-stamp">{todayShanghaiDateLabel()} <span>·</span> {todayShanghaiWeekdayLabel()}</div>
-          <div className="topbar-actions"><span className="ai-online-pill"><span /> AI 在线</span><button className="icon-button" aria-label="打开消息" onClick={() => notify(reviewEnabled ? "下一次 AI 晚间回顾：今天 21:30" : "晚间回顾目前已关闭") }><MessageCircle size={18} /></button><div className="avatar avatar-small">{demoSeed.user.displayName.slice(0, 1)}</div></div>
+          <div className="topbar-actions"><span className="ai-online-pill"><span /> AI 在线</span><button className="icon-button" aria-label="打开消息" onClick={() => notify(reviewEnabled ? `下一次 AI 晚间回顾：今天 ${eveningTime}` : "晚间回顾目前已关闭") }><MessageCircle size={18} /></button><div className="avatar avatar-small">{demoSeed.user.displayName.slice(0, 1)}</div></div>
         </header>
 
         <div className="content-wrap">
@@ -820,16 +964,17 @@ export default function Home() {
               onToggleReview={toggleReviewSchedule}
               onStartReview={startEveningReview}
               evening={evening}
+              eveningTime={eveningTime}
               pomodoroVisible={showPomodoro}
               onTogglePomodoro={() => setShowPomodoro((visible) => !visible)}
               pomodoro={<PomodoroWidget mode={pomodoroMode} seconds={pomodoroSeconds} isRunning={isPomodoroRunning} onToggle={togglePomodoro} onReset={resetPomodoro} onModeChange={changePomodoroMode} />}
             />
           ) : activeTab === "计划" ? (
-            <PlanPanel tasks={tasks} focusGoals={focusGoals} onToggleTask={toggleTask} onSplitGoal={splitGoal} onBackToToday={() => setActiveTab("今日")} />
+            <PlanPanel tasks={tasks} goals={goals} focusGoals={focusGoals} onToggleTask={toggleTask} onSplitGoal={splitGoal} onCreateGoal={createGoal} onUpdateGoal={updateGoal} onDeleteGoal={deleteGoal} onAgentGoal={handleAgentGoal} onBackToToday={() => setActiveTab("今日")} />
           ) : activeTab === "记录" ? (
             <RecordsPanel logs={logs} input={input} setInput={setInput} recordMinutes={recordMinutes} setRecordMinutes={setRecordMinutes} recordOutput={recordOutput} setRecordOutput={setRecordOutput} inputRef={quickLogRef} onSubmit={submitLog} onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)} onBackToToday={() => setActiveTab("今日")} />
           ) : (
-            <GrowthPanel growthStats={growthStats} onBackToToday={() => setActiveTab("今日")} />
+            <GrowthPanel growthStats={growthStats} goals={goals} onBackToToday={() => setActiveTab("今日")} />
           )}
         </div>
         <div className="mobile-nav">{tabs.map(({ label, icon: Icon }) => <button key={label} className={activeTab === label ? "active" : ""} onClick={() => setActiveTab(label)} aria-current={activeTab === label ? "page" : undefined}><Icon size={18} /><span>{label}</span></button>)}</div>
@@ -881,12 +1026,13 @@ type TodayHomeProps = {
   onToggleReview: () => void;
   onStartReview: () => void;
   evening: EveningCardState;
+  eveningTime: string;
   pomodoroVisible: boolean;
   onTogglePomodoro: () => void;
   pomodoro: React.ReactNode;
 };
 
-function TodayHome({ greeting, tasks, doneCount, input, setInput, recordMinutes, setRecordMinutes, recordOutput, setRecordOutput, quickLogRef, onSubmit, onToggleTask, onOpenPlan, assistantReply, isAgentBusy, reviewEnabled, onToggleReview, onStartReview, evening, pomodoroVisible, onTogglePomodoro, pomodoro }: TodayHomeProps) {
+function TodayHome({ greeting, tasks, doneCount, input, setInput, recordMinutes, setRecordMinutes, recordOutput, setRecordOutput, quickLogRef, onSubmit, onToggleTask, onOpenPlan, assistantReply, isAgentBusy, reviewEnabled, onToggleReview, onStartReview, evening, eveningTime, pomodoroVisible, onTogglePomodoro, pomodoro }: TodayHomeProps) {
   const visibleTasks = tasks.slice(0, 4);
   return <div className="home-command-center">
     <section className="home-intro">
@@ -895,7 +1041,7 @@ function TodayHome({ greeting, tasks, doneCount, input, setInput, recordMinutes,
         <h1>{greeting}</h1>
         <p className="home-intro-copy">随手记下今天发生的事，白天不打断节奏；晚上 AI 再把一天收束成经验。</p>
       </div>
-      <div className="home-intro-stamp"><span className="home-stamp-dot" />{reviewEnabled ? "今晚 21:30 回顾" : "晚间回顾已关闭"}</div>
+      <div className="home-intro-stamp"><span className="home-stamp-dot" />{reviewEnabled ? `今晚 ${eveningTime} 回顾` : "晚间回顾已关闭"}</div>
     </section>
 
     <section className="ai-dialog-card" aria-label="AI 今日对话入口">
@@ -915,7 +1061,7 @@ function TodayHome({ greeting, tasks, doneCount, input, setInput, recordMinutes,
       <div className="ai-suggestion-row"><span>可以直接说：</span><button onClick={() => setInput("今天学了什么：")}>今天学了什么</button><button onClick={() => setInput("今天卡在哪里：")}>今天卡在哪里</button><button onClick={() => setInput("今晚回顾：")}>今晚回顾</button></div>
     </section>
 
-    <section className="home-follow-up home-evening-report-hint"><div className="follow-up-icon"><BedDouble size={17} /></div><div><span className="eyebrow">EVENING REPORT · 21:30</span><strong>白天先记录，晚上再统一回答</strong><p>AI 会把今天的学习、运动、生活和休息合在一起，依次追问行动、理解与明天的一步。</p></div><span className="follow-up-count">晚报</span></section>
+    <section className="home-follow-up home-evening-report-hint"><div className="follow-up-icon"><BedDouble size={17} /></div><div><span className="eyebrow">EVENING REPORT · {eveningTime}</span><strong>白天先记录，晚上再统一回答</strong><p>AI 会把今天的学习、运动、生活和休息合在一起，依次追问行动、理解与明天的一步。</p></div><span className="follow-up-count">晚报</span></section>
 
     <section className="home-agenda-grid">
       <div className="home-agenda-card">
@@ -929,16 +1075,30 @@ function TodayHome({ greeting, tasks, doneCount, input, setInput, recordMinutes,
         {evening.state === "ready" && evening.summary ? (
           <>
             <p className="evening-summary-preview">{evening.summary.length > 120 ? `${evening.summary.slice(0, 120)}…` : evening.summary}</p>
+            {evening.content && <EveningStructured content={evening.content} />}
             <div className="review-time-row"><strong>今日晚报</strong><span>服务端已生成 · 三问待你回答</span></div>
           </>
         ) : (
           <p>{evening.state === "loading" ? "正在加载今日晚报…" : evening.state === "generating" ? "AI 正在把今天的记录收束成晚报…" : evening.state === "error" ? "今日晚报生成失败，可以稍后手动回顾。" : "AI 会在晚上把今天的记录收束成三问。白天记录，晚上回答。"}</p>
         )}
-        {evening.state === "no-report" && <div className="review-time-row"><strong>21:30</strong><span>每天一次 · 轻提醒</span><button className={`review-toggle ${reviewEnabled ? "is-enabled" : ""}`} aria-pressed={reviewEnabled} onClick={onToggleReview}><span />{reviewEnabled ? "已开启" : "已关闭"}</button></div>}
+        {evening.state === "no-report" && <div className="review-time-row"><strong>{eveningTime}</strong><span>每天一次 · 轻提醒</span><button className={`review-toggle ${reviewEnabled ? "is-enabled" : ""}`} aria-pressed={reviewEnabled} onClick={onToggleReview}><span />{reviewEnabled ? "已开启" : "已关闭"}</button></div>}
         <button className="review-start-button" onClick={onStartReview}>现在开始回顾 <ArrowUpRight size={15} /></button></aside>
     </section>
 
     <div className="home-trust-line"><span><Sparkles size={13} /> AI 只在需要时出现</span><span>计划、成长和账本会在你需要时展开</span><button className="text-button" onClick={onOpenPlan}>打开计划地图 <ChevronRight size={14} /></button></div>
+  </div>;
+}
+
+/** 晚报卡结构化内容（Phase 2：今日达成 / 遇到的阻碍 / 明日建议） */
+function EveningStructured({ content }: { content: Record<string, unknown> }) {
+  const achievement = Array.isArray(content.achievement) ? content.achievement.filter((x): x is string => typeof x === "string") : [];
+  const problem = Array.isArray(content.problem) ? content.problem.filter((x): x is string => typeof x === "string") : [];
+  const suggestion = Array.isArray(content.suggestion) ? content.suggestion.filter((x): x is string => typeof x === "string") : [];
+  if (achievement.length === 0 && problem.length === 0 && suggestion.length === 0) return null;
+  return <div className="evening-structured">
+    {achievement.length > 0 && <div className="evening-block"><strong>今日达成</strong><ul>{achievement.map((a) => <li key={a}>{a}</li>)}</ul></div>}
+    {problem.length > 0 && <div className="evening-block"><strong>遇到的阻碍</strong><ul>{problem.map((p) => <li key={p}>{p}</li>)}</ul></div>}
+    {suggestion.length > 0 && <div className="evening-block"><strong>明日建议</strong><ul>{suggestion.map((s) => <li key={s}>{s}</li>)}</ul></div>}
   </div>;
 }
 
@@ -977,14 +1137,57 @@ function WorkspaceHeader({ eyebrow, title, description, onBackToToday }: { eyebr
   return <div className="workspace-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><button className="quiet-button" onClick={onBackToToday}><LayoutDashboard size={15} /> 回到今日</button></div>;
 }
 
-function PlanPanel({ tasks, focusGoals, onToggleTask, onSplitGoal, onBackToToday }: { tasks: Task[]; focusGoals: Goal[] | null; onToggleTask: (id: string) => void; onSplitGoal: (goal: Goal) => void; onBackToToday: () => void }) {
+function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onSplitGoal, onCreateGoal, onUpdateGoal, onDeleteGoal, onAgentGoal, onBackToToday }: {
+  tasks: Task[];
+  goals: PlanGoal[];
+  focusGoals: Goal[] | null;
+  onToggleTask: (id: string) => void;
+  onSplitGoal: (goal: Goal) => void;
+  onCreateGoal: (input: GoalInput) => void;
+  onUpdateGoal: (id: string, input: GoalInput) => void;
+  onDeleteGoal: (id: string) => void;
+  onAgentGoal: () => void;
+  onBackToToday: () => void;
+}) {
   const completed = tasks.filter((task) => task.status === "done").length;
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState({ title: "", description: "", startDate: "", endDate: "", horizon: "" });
+
+  function startCreate() {
+    setEditingId(null);
+    setForm({ title: "", description: "", startDate: "", endDate: "", horizon: "" });
+    setShowForm(true);
+  }
+  function startEdit(goal: PlanGoal) {
+    setEditingId(goal.id);
+    setForm({ title: goal.title, description: goal.description, startDate: goal.startDate ?? "", endDate: goal.endDate ?? "", horizon: goal.horizon });
+    setShowForm(true);
+  }
+  function submitForm() {
+    if (!form.title.trim()) return;
+    const input: GoalInput = {
+      title: form.title.trim(),
+      description: form.description.trim(),
+      startDate: form.startDate || undefined,
+      endDate: form.endDate || undefined,
+      horizon: form.horizon.trim(),
+    };
+    if (editingId) onUpdateGoal(editingId, input);
+    else onCreateGoal(input);
+    setShowForm(false);
+    setEditingId(null);
+  }
+
   return <div className="workspace-page">
     <WorkspaceHeader eyebrow="PLAN BOARD" title="计划地图" description="先看目标，再看今天要落地的那一步。" onBackToToday={onBackToToday} />
+    <div className="goal-grid-head"><span>你的真实目标 · 进度按任务完成率派生</span><button className="quiet-button" onClick={startCreate}><Plus size={14} /> 新建目标</button></div>
     <div className="goal-grid">
-      {demoSeed.goals.map((goal) => <article className="goal-card" key={goal.id}><div className="goal-card-top"><span className="goal-status">{goal.status}</span><span className="goal-horizon">{goal.horizon}</span></div><h3>{goal.title}</h3><p>{goal.description}</p><div className="goal-progress-row"><span>当前进度</span><strong>{goal.progress}%</strong></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="goal-footer"><span><Target size={13} /> {goal.id === "goal-product" ? "产品构建" : "技能成长"}</span><button className="text-button" onClick={() => onSplitGoal(goal)}>拆成行动 <ChevronRight size={14} /></button></div></article>)}
+      {goals.map((goal) => <article className="goal-card" key={goal.id}><div className="goal-card-top"><span className="goal-status">{goal.status}</span><span className="goal-horizon">{goal.horizon || "未设周期"}</span></div><h3>{goal.title}</h3><p>{goal.description || "还没有描述"}</p><div className="goal-progress-row"><span>当前进度</span><strong>{goal.progress}%</strong></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="goal-footer"><span><Target size={13} /> {goal.taskCount ?? 0} 个任务 · {goal.doneCount ?? 0} 完成</span><div className="goal-actions"><button className="text-button" onClick={() => startEdit(goal)}>编辑</button><button className="text-button" onClick={() => onDeleteGoal(goal.id)}>删除</button><button className="text-button" onClick={() => onSplitGoal(goal)}>拆成行动 <ChevronRight size={14} /></button></div></div></article>)}
+      {goals.length === 0 && <article className="goal-card goal-card-empty"><h3>还没有目标</h3><p>创建一个 4–12 周目标，计划地图会从这里长出真实的下一步。</p><button className="primary-button" onClick={startCreate}>创建第一个目标 <ArrowUpRight size={15} /></button></article>}
     </div>
-     <section className="panel agent-roadmap-panel"><div className="panel-heading"><div><span className="eyebrow">AI AGENT TRACK</span><h2>学习 Agent，并开发自己的 Agent</h2></div><Sparkles size={18} className="panel-icon" /></div><p className="panel-desc">这条路线把“学 AI”收敛成一个可以持续交付的小项目：先理解组成，再做最小闭环，最后用测验和真实任务验证。</p><div className="roadmap-stages"><div className="roadmap-stage"><span className="roadmap-number">01</span><div><strong>理解 Agent</strong><p>LLM、Prompt、工具调用、状态/记忆和评估。</p></div></div><div className="roadmap-stage"><span className="roadmap-number">02</span><div><strong>做最小闭环</strong><p>信息 → 决策 → 工具 → 结果，先解决一个具体问题。</p></div></div><div className="roadmap-stage"><span className="roadmap-number">03</span><div><strong>验证与迭代</strong><p>留下可验证证据，用理解题、日志和用户反馈校准。</p></div></div></div><div className="roadmap-action"><div><span>今日建议 · 45 分钟</span><strong>定义你的 Agent 问题与验收标准</strong></div><button className="primary-button" onClick={() => onSplitGoal({ id: "goal-ai-agent", title: "学习 Agent 并开发自己的 Agent", description: "从一个具体问题做出最小可运行闭环", progress: 0, horizon: "今日路线", status: "进行中" })}>加入今日计划 <ArrowUpRight size={15} /></button></div></section>
+    {showForm && <section className="panel goal-form-panel"><div className="panel-heading"><div><span className="eyebrow">{editingId ? "EDIT GOAL" : "NEW GOAL"}</span><h2>{editingId ? "编辑目标" : "新建目标"}</h2></div><button className="quiet-button" onClick={() => { setShowForm(false); setEditingId(null); }}>收起</button></div><div className="goal-form"><input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="目标标题，例如：半年英语提升" aria-label="目标标题" /><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="描述（可选）：想达到什么结果" aria-label="目标描述" /><div className="goal-form-row"><input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} aria-label="开始日期" /><input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} aria-label="结束日期" /><input value={form.horizon} onChange={(e) => setForm({ ...form, horizon: e.target.value })} placeholder="周期，如 4 周目标" aria-label="周期" /></div><button className="primary-button" onClick={submitForm} disabled={!form.title.trim()}>{editingId ? "保存修改" : "创建目标"} <ArrowUpRight size={15} /></button></div></section>}
+     <section className="panel agent-roadmap-panel"><div className="panel-heading"><div><span className="eyebrow">AI AGENT TRACK</span><h2>学习 Agent，并开发自己的 Agent</h2></div><Sparkles size={18} className="panel-icon" /></div><p className="panel-desc">这条路线把“学 AI”收敛成一个可以持续交付的小项目：先理解组成，再做最小闭环，最后用测验和真实任务验证。</p><div className="roadmap-stages"><div className="roadmap-stage"><span className="roadmap-number">01</span><div><strong>理解 Agent</strong><p>LLM、Prompt、工具调用、状态/记忆和评估。</p></div></div><div className="roadmap-stage"><span className="roadmap-number">02</span><div><strong>做最小闭环</strong><p>信息 → 决策 → 工具 → 结果，先解决一个具体问题。</p></div></div><div className="roadmap-stage"><span className="roadmap-number">03</span><div><strong>验证与迭代</strong><p>留下可验证证据，用理解题、日志和用户反馈校准。</p></div></div></div><div className="roadmap-action"><div><span>今日建议 · 45 分钟</span><strong>定义你的 Agent 问题与验收标准</strong></div><button className="primary-button" onClick={onAgentGoal}>加入今日计划 <ArrowUpRight size={15} /></button></div></section>
     <div className="plan-layout">
       <section className="panel schedule-panel"><div className="panel-heading"><div><span className="eyebrow">TODAY TIMELINE</span><h2>今日时间轴</h2></div><span className="count-badge">{completed}/{tasks.length} 已完成</span></div><p className="panel-desc">把任务放进现实的时间里，完成感会更具体。</p><div className="schedule-list">{tasks.map((task) => <div className={`schedule-card ${task.status === "done" ? "is-done" : task.status === "current" ? "is-current" : ""}`} key={task.id}><div className="schedule-time"><strong>{task.time}</strong><span>{task.duration}</span></div><div className={`schedule-icon kind-${task.kind}`}>{renderTaskKindIcon(task.kind, 16)}</div><div className="schedule-copy"><div className="task-title-line"><h3>{task.title}</h3><span className={`schedule-kind kind-${task.kind}`}>{taskKindLabel(task.kind)}</span>{task.status === "current" && <span className="now-pill">NOW</span>}</div><p>{task.subtitle}</p><span className="schedule-reward">+{task.xp} XP · +{task.coin} coin</span></div><button className={`task-check ${task.status === "done" ? "checked" : ""}`} onClick={() => onToggleTask(task.id)} aria-label={`${task.status === "done" ? "撤销" : "完成"}：${task.title}`}>{task.status === "done" ? <Check size={15} strokeWidth={3} /> : <span />}</button></div>)}</div></section>
      <aside className="panel weekly-plan-panel"><div className="panel-heading"><div><span className="eyebrow">WEEKLY INTENT</span><h2>本周重点</h2></div><ListChecks size={18} className="panel-icon" /></div><div className="intent-list">{focusGoals && focusGoals.length > 0 ? focusGoals.map((goal, index) => <div className="intent-item" key={goal.id}><span className="intent-number">0{index + 1}</span><div><strong>{goal.title}</strong><p>{goal.description}</p></div></div>) : <div className="intent-item"><span className="intent-number">—</span><div><strong>还没有进行中的目标</strong><p>在计划里创建一个 4-12 周目标，本周重点会从这里出现。</p></div></div>}</div><div className="plan-note"><Sparkles size={15} /><span>建议：今天完成主任务后，不再新增新的计划。</span></div></aside>
@@ -1030,7 +1233,7 @@ function LearningQuizCard({ quiz, answers, grade, busy, error, onAnswer, onGrade
 
 type GrowthStats = { weeklyMinutes?: Array<{ day: string; value: number; label: string }>; evidence?: { input: number; understanding: number; application: number }; activeDays?: number } | null;
 
-function GrowthPanel({ growthStats, onBackToToday }: { growthStats: GrowthStats; onBackToToday: () => void }) {
+function GrowthPanel({ growthStats, goals, onBackToToday }: { growthStats: GrowthStats; goals: PlanGoal[]; onBackToToday: () => void }) {
   const weekly = growthStats?.weeklyMinutes ?? [];
   const totalMinutes = weekly.reduce((sum, bar) => sum + bar.value, 0);
   const applicationCount = growthStats?.evidence?.application ?? 0;
@@ -1059,7 +1262,7 @@ function GrowthPanel({ growthStats, onBackToToday }: { growthStats: GrowthStats;
     <WorkspaceHeader eyebrow="GROWTH DASHBOARD" title="成长仪表盘" description="不把自己压缩成一个分数，只看节奏、证据和下一轮实验。" onBackToToday={onBackToToday} />
     <div className="growth-metrics"><article className="metric-card metric-coral"><span className="metric-label">有效行动日</span><strong>{streak}<small> 天</small></strong><p>连续记录节奏</p></article><article className="metric-card metric-navy"><span className="metric-label">本周投入</span><strong>{Math.floor(totalMinutes / 60)}<small>h</small> {totalMinutes % 60}<small>m</small></strong><p>7 天累计专注时长</p></article><article className="metric-card metric-sage"><span className="metric-label">掌握证据</span><strong>{applicationCount + understandingCount}<small> 条</small></strong><p>理解 + 应用形成证据</p></article><article className="metric-card metric-paper"><span className="metric-label">成长等级</span><strong>Lv.{String(currentLevel).padStart(2, "0")}</strong><p>{demoSeed.user.role} · 距离升级 {nextLevelXp} XP</p></article></div>
     <div className="growth-layout"><section className="panel growth-chart-panel"><div className="panel-heading"><div><span className="eyebrow">RHYTHM TREND</span><h2>近 7 天投入节奏</h2></div><span className="trend-chip"><ArrowUpRight size={13} /> 真实投入</span></div><div className="growth-chart">{weekly.map((bar, index) => <div className="growth-bar-column" key={bar.day}><span className="growth-bar-value">{bar.value > 0 ? bar.label : "—"}</span><div className="growth-bar-track"><span className={index === 3 ? "highlight" : ""} style={{ height: `${Math.min(100, bar.value)}%` }} /></div><span>{bar.day.slice(5)}</span></div>)}</div><div className="chart-caption"><span><i className="legend-dot" /> 有效专注时长</span><strong>按你的记录累计</strong></div></section><section className="panel evidence-panel"><div className="panel-heading"><div><span className="eyebrow">EVIDENCE MIX</span><h2>进步由什么组成</h2></div><BarChart3 size={18} className="panel-icon" /></div><div className="evidence-row"><div className="evidence-label"><span>行动记录</span><strong>{inputCount} 条</strong></div><div className="evidence-track"><span style={{ width: `${(inputCount / evidenceTotal) * 100}%` }} /></div></div><div className="evidence-row"><div className="evidence-label"><span>理解回应</span><strong>{understandingCount} 条</strong></div><div className="evidence-track"><span className="evidence-green" style={{ width: `${(understandingCount / evidenceTotal) * 100}%` }} /></div></div><div className="evidence-row"><div className="evidence-label"><span>实际应用</span><strong>{applicationCount} 条</strong></div><div className="evidence-track"><span className="evidence-gold" style={{ width: `${(applicationCount / evidenceTotal) * 100}%` }} /></div><p className="evidence-note"><Sparkles size={13} /> 理解来自测验 ≥60 分，应用来自完成任务。</p></div></section></div>
-    <section className="panel goal-progress-panel"><div className="panel-heading"><div><span className="eyebrow">GOAL PROGRESS</span><h2>目标的真实进度</h2></div><span className="count-badge">只比较自己的基线</span></div><div className="growth-goal-list">{demoSeed.goals.map((goal) => <div className="growth-goal" key={goal.id}><div className="growth-goal-heading"><div><strong>{goal.title}</strong><span>{goal.description}</span></div><em>{goal.progress}%</em></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="growth-goal-footer"><span>{goal.horizon}</span><span>{goal.status}</span></div></div>)}</div></section>
+    <section className="panel goal-progress-panel"><div className="panel-heading"><div><span className="eyebrow">GOAL PROGRESS</span><h2>目标的真实进度</h2></div><span className="count-badge">只比较自己的基线</span></div><div className="growth-goal-list">{(goals.length > 0 ? goals : demoSeed.goals).map((goal) => <div className="growth-goal" key={goal.id}><div className="growth-goal-heading"><div><strong>{goal.title}</strong><span>{goal.description}</span></div><em>{goal.progress}%</em></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="growth-goal-footer"><span>{goal.horizon || "未设周期"}</span><span>{goal.status}</span></div></div>)}</div></section>
   </div>;
 }
 
