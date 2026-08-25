@@ -125,7 +125,7 @@ async function applyLedgerInTx(
  * ============================================================= */
 
 const TASK_SELECT = `id, user_id, goal_id, title, subtitle, scheduled_time, duration_minutes, xp, coin,
-  status, kind, version, deadline::text as deadline, frequency, completed_at, created_at, updated_at`;
+  status, kind, version, deadline::text as deadline, frequency, acceptance, completed_at, created_at, updated_at`;
 
 export type CreateTaskInput = {
   title: string;
@@ -138,14 +138,16 @@ export type CreateTaskInput = {
   kind?: DbTask["kind"];
   xp?: number;
   coin?: number;
+  /** 完成标准（Agent Decompose V1 拆解生成） */
+  acceptance?: string | null;
 };
 
 /** 创建任务（status 默认 upcoming；xp/coin 默认 0） */
 export async function createTask(userId: string, input: CreateTaskInput): Promise<DbTask> {
   const { rows } = await getPool().query<DbTask>(
     `insert into public.tasks
-       (user_id, goal_id, title, subtitle, scheduled_time, duration_minutes, deadline, frequency, kind, xp, coin, status)
-     values ($1, $2, $3, $4, $5, $6, $7::date, $8, $9, $10, $11, 'upcoming')
+       (user_id, goal_id, title, subtitle, scheduled_time, duration_minutes, deadline, frequency, kind, xp, coin, status, acceptance)
+     values ($1, $2, $3, $4, $5, $6, $7::date, $8, $9, $10, $11, 'upcoming', $12)
      returning ${TASK_SELECT}`,
     [
       userId,
@@ -159,6 +161,32 @@ export async function createTask(userId: string, input: CreateTaskInput): Promis
       input.kind ?? "focus",
       input.xp ?? 0,
       input.coin ?? 0,
+      input.acceptance ?? null,
+    ],
+  );
+  return rows[0];
+}
+
+/** 事务内创建任务（Agent Decompose 批量落库用；SQL 与 createTask 一致） */
+export async function createTaskTx(client: PoolClient, userId: string, input: CreateTaskInput): Promise<DbTask> {
+  const { rows } = await client.query<DbTask>(
+    `insert into public.tasks
+       (user_id, goal_id, title, subtitle, scheduled_time, duration_minutes, deadline, frequency, kind, xp, coin, status, acceptance)
+     values ($1, $2, $3, $4, $5, $6, $7::date, $8, $9, $10, $11, 'upcoming', $12)
+     returning ${TASK_SELECT}`,
+    [
+      userId,
+      input.goalId ?? null,
+      input.title,
+      input.subtitle ?? "",
+      input.scheduledTime ?? "",
+      input.durationMinutes ?? null,
+      input.deadline ?? null,
+      input.frequency ?? null,
+      input.kind ?? "focus",
+      input.xp ?? 0,
+      input.coin ?? 0,
+      input.acceptance ?? null,
     ],
   );
   return rows[0];
@@ -235,6 +263,26 @@ export async function updateTask(userId: string, taskId: string, input: UpdateTa
 export async function deleteTask(userId: string, taskId: string): Promise<boolean> {
   const { rowCount } = await getPool().query(`delete from public.tasks where id = $1 and user_id = $2`, [taskId, userId]);
   return (rowCount ?? 0) > 0;
+}
+
+/** 批量删除任务（Agent Decompose 撤销用；事务 + id/user_id 双条件；不冲正账本） */
+export async function batchDeleteTasks(userId: string, taskIds: string[]): Promise<number> {
+  if (taskIds.length === 0) return 0;
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const { rowCount } = await client.query(
+      `delete from public.tasks where user_id = $1 and id = any($2::uuid[])`,
+      [userId, taskIds],
+    );
+    await client.query("commit");
+    return rowCount ?? 0;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /** 按 id 取单个任务（user 隔离；跨用户返回 null） */

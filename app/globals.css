@@ -265,21 +265,31 @@ h1 { margin-top: 15px; color: var(--ink); font: 600 clamp(29px, 3.2vw, 40px)/1.1
 .evening-block strong { display: block; color: var(--ink); font: 500 11px 'Noto Serif SC', serif; }
 .evening-block ul { margin: 4px 0 0; padding: 0; list-style: none; }
 .evening-block li { color: var(--ink-soft); font-size: 11px; line-height: 1.6; }
+.schedule-card.is-expandable, .home-agenda-row.is-expandable { cursor: pointer; }
+.task-acceptance { color: #8a6a4a; font-size: 10px; line-height: 1.6; margin-top: 4px; overflow-wrap: anywhere; }
+.task-acceptance span { display: block; color: #a4774e; font: 8px 'DM Mono', monospace; margin-bottom: 2px; }
+.text-button:disabled { opacity: .45; cursor: wait; }
+.undo-bar { position: fixed; right: 22px; bottom: 22px; z-index: 30; display: flex; align-items: center; gap: 14px; padding: 10px 14px; border: 1px solid #e4d9c6; border-radius: 10px; background: #fffaf0; color: var(--ink-soft); font-size: 12px; box-shadow: 0 6px 20px rgba(56,49,40,.08); }
+.undo-bar button { display: inline-flex; align-items: center; gap: 4px; color: var(--coral); font-size: 12px; font-weight: 500; background: none; border: 0; padding: 0; cursor: pointer; }
 .plan-layout, .records-layout, .growth-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr); gap: 14px; }
 .schedule-panel, .weekly-plan-panel, .records-main, .quick-record-panel, .ledger-panel, .growth-chart-panel, .evidence-panel, .goal-progress-panel { min-width: 0; }
-.schedule-list { display: grid; gap: 7px; margin-top: 16px; }
+/* 今日时间轴：固定 6 条高度（77px × 6 + 7px gap × 5 = 497px），超出上下滑动，不撑开页面 */
+.schedule-list { display: grid; gap: 7px; margin-top: 16px; height: 497px; overflow-y: auto; padding-right: 8px; scrollbar-width: thin; scrollbar-color: #d8d4cc transparent; }
+.schedule-list::-webkit-scrollbar { width: 6px; }
+.schedule-list::-webkit-scrollbar-thumb { background: #d8d4cc; border-radius: 3px; }
+.schedule-list::-webkit-scrollbar-track { background: transparent; }
 .schedule-card { min-height: 77px; display: flex; align-items: center; gap: 12px; padding: 11px 12px; border: 1px solid transparent; border-bottom-color: var(--line); }
 .schedule-card.is-current { border-color: #e7d9d0; border-radius: 10px; background: var(--white); box-shadow: 0 5px 17px rgba(56,49,40,.035); }
 .schedule-card.is-done { opacity: .68; }
-.schedule-time { width: 44px; flex: 0 0 44px; color: #9ba39d; font: 9px 'DM Mono', monospace; text-align: right; }
+.schedule-time { width: 44px; flex: 0 0 44px; color: #9ba39d; font: 9px 'DM Mono', monospace; text-align: right; white-space: nowrap; }
 .schedule-time strong, .schedule-time span { display: block; }
 .schedule-time strong { color: var(--ink-soft); font-size: 10px; font-weight: 500; }
 .schedule-time span { margin-top: 5px; }
 .schedule-icon { width: 33px; height: 33px; flex: 0 0 33px; display: grid; place-items: center; border-radius: 9px; }
 .schedule-copy { min-width: 0; flex: 1; }
 .schedule-copy h3 { color: var(--ink); font-size: 12px; }
-.schedule-copy p { color: var(--ink-soft); font-size: 9px; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.schedule-reward { display: inline-block; color: #a4774e; font: 8px 'DM Mono', monospace; margin-top: 7px; }
+.schedule-copy p { color: var(--ink-soft); font-size: 9px; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.schedule-reward { display: inline-block; color: #a4774e; font: 8px 'DM Mono', monospace; margin-top: 7px; white-space: nowrap; }
 .intent-list { display: grid; gap: 17px; margin-top: 20px; }
 .intent-item { display: flex; gap: 11px; }
 .intent-number { color: var(--coral); font: 500 10px 'DM Mono', monospace; padding-top: 2px; }

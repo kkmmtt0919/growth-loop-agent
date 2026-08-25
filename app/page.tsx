@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Capacitor } from "@capacitor/core";
 import {
   ArrowUpRight,
@@ -29,6 +29,7 @@ import {
   Target,
   Timer,
   Trophy,
+  Undo2,
   WalletCards,
   X,
 } from "lucide-react";
@@ -226,6 +227,9 @@ export default function Home() {
   const [focusGoals, setFocusGoals] = useState<Goal[] | null>(null);
   // 计划页真实目标：初始用 demoSeed 回退（原型模式），ready 后由 GET /api/goals 覆盖
   const [goals, setGoals] = useState<PlanGoal[]>(demoSeed.goals);
+  // Agent 拆解：进行中的目标 id（按钮 loading）+ 最近一次拆解结果（undo 用 state 保存，不依赖 toast）
+  const [decomposingGoalId, setDecomposingGoalId] = useState<string | null>(null);
+  const [lastDecompose, setLastDecompose] = useState<{ ids: string[]; expireAt: number } | null>(null);
 
   useEffect(() => {
     const storedSessionId = window.localStorage.getItem(SESSION_STORAGE_KEY) || `session-${Date.now()}`;
@@ -807,15 +811,59 @@ export default function Home() {
     }
   }
 
-  function splitGoal(goal: Goal) {
-    void addTask({
-      title: `从「${goal.title}」拆一步`,
-      goalId: goal.id,
-      subtitle: "先完成一个 15 分钟可验证的小动作",
-      scheduledTime: "明天",
-      durationMinutes: 15,
-      kind: "focus",
-    });
+  /** 刷新目标列表（拆解/撤销后派生 taskCount/doneCount 需要更新） */
+  const refreshGoals = useCallback(() => {
+    if (authMode !== "ready" || !authToken) return;
+    fetch("/api/goals", { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((d: { goals?: Record<string, unknown>[] }) => {
+        if (Array.isArray(d.goals)) setGoals(d.goals.map(mapApiGoal));
+      })
+      .catch(() => {});
+  }, [authMode, authToken]);
+
+  /** Agent 拆解：POST decompose → 新任务并入今日列表 + undo 记录（5 分钟窗口） */
+  async function decomposeGoal(goalId: string) {
+    if (!requireAuth()) return;
+    if (decomposingGoalId) return;
+    setDecomposingGoalId(goalId);
+    try {
+      const res = await fetch(`/api/goals/${goalId}/decompose`, { method: "POST", headers: apiHeaders() });
+      if (!res.ok) throw new Error("decompose failed");
+      const data = (await res.json()) as { count?: number; createdTaskIds?: string[]; tasks?: Task[] };
+      if (data.tasks?.length) {
+        setTasks((current) => [...current, ...(data.tasks as Task[])]);
+        setLastDecompose({ ids: data.createdTaskIds ?? [], expireAt: Date.now() + 5 * 60_000 });
+        notify(`已拆出 ${data.tasks.length} 步`);
+      } else {
+        notify("这次没有新增任务（步骤与已有行动重复）");
+      }
+      refreshGoals();
+    } catch {
+      notify("拆解失败，请稍后再试");
+    } finally {
+      setDecomposingGoalId(null);
+    }
+  }
+
+  /** 撤销拆解：批量删除刚创建的任务（不冲正账本） */
+  async function undoDecompose() {
+    if (!lastDecompose || !requireAuth()) return;
+    const ids = lastDecompose.ids;
+    try {
+      const res = await fetch("/api/tasks/batch", {
+        method: "DELETE",
+        headers: apiHeaders(),
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) throw new Error("undo failed");
+      setTasks((current) => current.filter((t) => !ids.includes(t.id)));
+      setLastDecompose(null);
+      notify("已撤销拆解");
+      refreshGoals();
+    } catch {
+      notify("撤销失败，请重试");
+    }
   }
 
   /** AI Agent 路线卡：库中无该目标则先创建真实 goal，再拆出首个任务（防重复由 addTask/409 兜底） */
@@ -970,7 +1018,7 @@ export default function Home() {
               pomodoro={<PomodoroWidget mode={pomodoroMode} seconds={pomodoroSeconds} isRunning={isPomodoroRunning} onToggle={togglePomodoro} onReset={resetPomodoro} onModeChange={changePomodoroMode} />}
             />
           ) : activeTab === "计划" ? (
-            <PlanPanel tasks={tasks} goals={goals} focusGoals={focusGoals} onToggleTask={toggleTask} onSplitGoal={splitGoal} onCreateGoal={createGoal} onUpdateGoal={updateGoal} onDeleteGoal={deleteGoal} onAgentGoal={handleAgentGoal} onBackToToday={() => setActiveTab("今日")} />
+            <PlanPanel tasks={tasks} goals={goals} focusGoals={focusGoals} onToggleTask={toggleTask} onDecomposeGoal={decomposeGoal} decomposingGoalId={decomposingGoalId} onCreateGoal={createGoal} onUpdateGoal={updateGoal} onDeleteGoal={deleteGoal} onAgentGoal={handleAgentGoal} onBackToToday={() => setActiveTab("今日")} />
           ) : activeTab === "记录" ? (
             <RecordsPanel logs={logs} input={input} setInput={setInput} recordMinutes={recordMinutes} setRecordMinutes={setRecordMinutes} recordOutput={recordOutput} setRecordOutput={setRecordOutput} inputRef={quickLogRef} onSubmit={submitLog} onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)} onBackToToday={() => setActiveTab("今日")} />
           ) : (
@@ -996,6 +1044,12 @@ export default function Home() {
       </div>}
 
       {toast && <div className="toast" role="status" aria-live="polite"><span className="toast-status" /> {toast}</div>}
+      {lastDecompose && Date.now() < lastDecompose.expireAt && (
+        <div className="undo-bar" role="status" aria-live="polite">
+          <span>已拆出 {lastDecompose.ids.length} 步行动</span>
+          <button onClick={undoDecompose}>撤销 <Undo2 size={13} /></button>
+        </div>
+      )}
     </main>
   );
 }
@@ -1103,11 +1157,13 @@ function EveningStructured({ content }: { content: Record<string, unknown> }) {
 }
 
 function HomeAgendaRow({ task, onToggle }: { task: Task; onToggle: (id: string) => void }) {
-  return <article className={`home-agenda-row ${task.status === "done" ? "is-done" : task.status === "current" ? "is-current" : ""}`}>
-    <div className="home-agenda-time"><strong>{task.time}</strong><span>{task.duration}</span></div>
+  const [expanded, setExpanded] = useState(false);
+  const expandable = Boolean(task.acceptance);
+  return <article className={`home-agenda-row ${task.status === "done" ? "is-done" : task.status === "current" ? "is-current" : ""} ${expandable ? "is-expandable" : ""}`} onClick={() => expandable && setExpanded((value) => !value)}>
+    <div className="home-agenda-time"><strong>{task.time || "今天"}</strong><span>{task.duration}</span></div>
     <div className={`home-agenda-kind kind-${task.kind}`}>{renderTaskKindIcon(task.kind, 15)}</div>
-    <div className="home-agenda-copy"><div><strong>{task.title}</strong><span className={`home-kind-label kind-${task.kind}`}>{taskKindLabel(task.kind)}</span></div><p>{task.subtitle}</p></div>
-    <button className={`home-agenda-check ${task.status === "done" ? "is-done" : ""}`} onClick={() => onToggle(task.id)} aria-label={`${task.status === "done" ? "撤销" : "完成"}：${task.title}`}>{task.status === "done" ? <Check size={14} strokeWidth={3} /> : <span />}</button>
+    <div className="home-agenda-copy"><div><strong>{task.title}</strong><span className={`home-kind-label kind-${task.kind}`}>{taskKindLabel(task.kind)}</span></div><p>{task.subtitle}</p>{expanded && task.acceptance ? <p className="task-acceptance"><span>完成标准</span>{task.acceptance}</p> : null}</div>
+    <button className={`home-agenda-check ${task.status === "done" ? "is-done" : ""}`} onClick={(event) => { event.stopPropagation(); onToggle(task.id); }} aria-label={`${task.status === "done" ? "撤销" : "完成"}：${task.title}`}>{task.status === "done" ? <Check size={14} strokeWidth={3} /> : <span />}</button>
   </article>;
 }
 
@@ -1137,22 +1193,24 @@ function WorkspaceHeader({ eyebrow, title, description, onBackToToday }: { eyebr
   return <div className="workspace-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><button className="quiet-button" onClick={onBackToToday}><LayoutDashboard size={15} /> 回到今日</button></div>;
 }
 
-function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onSplitGoal, onCreateGoal, onUpdateGoal, onDeleteGoal, onAgentGoal, onBackToToday }: {
+function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpdateGoal, onDeleteGoal, onAgentGoal, onDecomposeGoal, decomposingGoalId, onBackToToday }: {
   tasks: Task[];
   goals: PlanGoal[];
   focusGoals: Goal[] | null;
   onToggleTask: (id: string) => void;
-  onSplitGoal: (goal: Goal) => void;
   onCreateGoal: (input: GoalInput) => void;
   onUpdateGoal: (id: string, input: GoalInput) => void;
   onDeleteGoal: (id: string) => void;
   onAgentGoal: () => void;
+  onDecomposeGoal: (goalId: string) => void;
+  decomposingGoalId: string | null;
   onBackToToday: () => void;
 }) {
   const completed = tasks.filter((task) => task.status === "done").length;
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({ title: "", description: "", startDate: "", endDate: "", horizon: "" });
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
 
   function startCreate() {
     setEditingId(null);
@@ -1183,13 +1241,13 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onSplitGoal, onCrea
     <WorkspaceHeader eyebrow="PLAN BOARD" title="计划地图" description="先看目标，再看今天要落地的那一步。" onBackToToday={onBackToToday} />
     <div className="goal-grid-head"><span>你的真实目标 · 进度按任务完成率派生</span><button className="quiet-button" onClick={startCreate}><Plus size={14} /> 新建目标</button></div>
     <div className="goal-grid">
-      {goals.map((goal) => <article className="goal-card" key={goal.id}><div className="goal-card-top"><span className="goal-status">{goal.status}</span><span className="goal-horizon">{goal.horizon || "未设周期"}</span></div><h3>{goal.title}</h3><p>{goal.description || "还没有描述"}</p><div className="goal-progress-row"><span>当前进度</span><strong>{goal.progress}%</strong></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="goal-footer"><span><Target size={13} /> {goal.taskCount ?? 0} 个任务 · {goal.doneCount ?? 0} 完成</span><div className="goal-actions"><button className="text-button" onClick={() => startEdit(goal)}>编辑</button><button className="text-button" onClick={() => onDeleteGoal(goal.id)}>删除</button><button className="text-button" onClick={() => onSplitGoal(goal)}>拆成行动 <ChevronRight size={14} /></button></div></div></article>)}
+      {goals.map((goal) => <article className="goal-card" key={goal.id}><div className="goal-card-top"><span className="goal-status">{goal.status}</span><span className="goal-horizon">{goal.horizon || "未设周期"}</span></div><h3>{goal.title}</h3><p>{goal.description || "还没有描述"}</p><div className="goal-progress-row"><span>当前进度</span><strong>{goal.progress}%</strong></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="goal-footer"><span><Target size={13} /> {goal.taskCount ?? 0} 个任务 · {goal.doneCount ?? 0} 完成</span><div className="goal-actions"><button className="text-button" onClick={() => startEdit(goal)}>编辑</button><button className="text-button" onClick={() => onDeleteGoal(goal.id)}>删除</button><button className="text-button" disabled={decomposingGoalId !== null} onClick={() => onDecomposeGoal(goal.id)}>{decomposingGoalId === goal.id ? "拆解中…" : "拆成行动"} <ChevronRight size={14} /></button></div></div></article>)}
       {goals.length === 0 && <article className="goal-card goal-card-empty"><h3>还没有目标</h3><p>创建一个 4–12 周目标，计划地图会从这里长出真实的下一步。</p><button className="primary-button" onClick={startCreate}>创建第一个目标 <ArrowUpRight size={15} /></button></article>}
     </div>
     {showForm && <section className="panel goal-form-panel"><div className="panel-heading"><div><span className="eyebrow">{editingId ? "EDIT GOAL" : "NEW GOAL"}</span><h2>{editingId ? "编辑目标" : "新建目标"}</h2></div><button className="quiet-button" onClick={() => { setShowForm(false); setEditingId(null); }}>收起</button></div><div className="goal-form"><input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="目标标题，例如：半年英语提升" aria-label="目标标题" /><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="描述（可选）：想达到什么结果" aria-label="目标描述" /><div className="goal-form-row"><input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} aria-label="开始日期" /><input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} aria-label="结束日期" /><input value={form.horizon} onChange={(e) => setForm({ ...form, horizon: e.target.value })} placeholder="周期，如 4 周目标" aria-label="周期" /></div><button className="primary-button" onClick={submitForm} disabled={!form.title.trim()}>{editingId ? "保存修改" : "创建目标"} <ArrowUpRight size={15} /></button></div></section>}
      <section className="panel agent-roadmap-panel"><div className="panel-heading"><div><span className="eyebrow">AI AGENT TRACK</span><h2>学习 Agent，并开发自己的 Agent</h2></div><Sparkles size={18} className="panel-icon" /></div><p className="panel-desc">这条路线把“学 AI”收敛成一个可以持续交付的小项目：先理解组成，再做最小闭环，最后用测验和真实任务验证。</p><div className="roadmap-stages"><div className="roadmap-stage"><span className="roadmap-number">01</span><div><strong>理解 Agent</strong><p>LLM、Prompt、工具调用、状态/记忆和评估。</p></div></div><div className="roadmap-stage"><span className="roadmap-number">02</span><div><strong>做最小闭环</strong><p>信息 → 决策 → 工具 → 结果，先解决一个具体问题。</p></div></div><div className="roadmap-stage"><span className="roadmap-number">03</span><div><strong>验证与迭代</strong><p>留下可验证证据，用理解题、日志和用户反馈校准。</p></div></div></div><div className="roadmap-action"><div><span>今日建议 · 45 分钟</span><strong>定义你的 Agent 问题与验收标准</strong></div><button className="primary-button" onClick={onAgentGoal}>加入今日计划 <ArrowUpRight size={15} /></button></div></section>
     <div className="plan-layout">
-      <section className="panel schedule-panel"><div className="panel-heading"><div><span className="eyebrow">TODAY TIMELINE</span><h2>今日时间轴</h2></div><span className="count-badge">{completed}/{tasks.length} 已完成</span></div><p className="panel-desc">把任务放进现实的时间里，完成感会更具体。</p><div className="schedule-list">{tasks.map((task) => <div className={`schedule-card ${task.status === "done" ? "is-done" : task.status === "current" ? "is-current" : ""}`} key={task.id}><div className="schedule-time"><strong>{task.time}</strong><span>{task.duration}</span></div><div className={`schedule-icon kind-${task.kind}`}>{renderTaskKindIcon(task.kind, 16)}</div><div className="schedule-copy"><div className="task-title-line"><h3>{task.title}</h3><span className={`schedule-kind kind-${task.kind}`}>{taskKindLabel(task.kind)}</span>{task.status === "current" && <span className="now-pill">NOW</span>}</div><p>{task.subtitle}</p><span className="schedule-reward">+{task.xp} XP · +{task.coin} coin</span></div><button className={`task-check ${task.status === "done" ? "checked" : ""}`} onClick={() => onToggleTask(task.id)} aria-label={`${task.status === "done" ? "撤销" : "完成"}：${task.title}`}>{task.status === "done" ? <Check size={15} strokeWidth={3} /> : <span />}</button></div>)}</div></section>
+      <section className="panel schedule-panel"><div className="panel-heading"><div><span className="eyebrow">TODAY TIMELINE</span><h2>今日时间轴</h2></div><span className="count-badge">{completed}/{tasks.length} 已完成</span></div><p className="panel-desc">把任务放进现实的时间里，完成感会更具体。</p><div className="schedule-list">{tasks.map((task) => <div className={`schedule-card ${task.status === "done" ? "is-done" : task.status === "current" ? "is-current" : ""} ${task.acceptance ? "is-expandable" : ""}`} key={task.id} onClick={() => task.acceptance && setExpandedTaskId(expandedTaskId === task.id ? null : task.id)}><div className="schedule-time"><strong>{task.time || "今天"}</strong><span>{task.duration}</span></div><div className={`schedule-icon kind-${task.kind}`}>{renderTaskKindIcon(task.kind, 16)}</div><div className="schedule-copy"><div className="task-title-line"><h3>{task.title}</h3><span className={`schedule-kind kind-${task.kind}`}>{taskKindLabel(task.kind)}</span>{task.status === "current" && <span className="now-pill">NOW</span>}</div><p>{task.subtitle}</p>{expandedTaskId === task.id && task.acceptance ? <p className="task-acceptance"><span>完成标准</span>{task.acceptance}</p> : null}<span className="schedule-reward">+{task.xp} XP · +{task.coin} coin</span></div><button className={`task-check ${task.status === "done" ? "checked" : ""}`} onClick={(event) => { event.stopPropagation(); onToggleTask(task.id); }} aria-label={`${task.status === "done" ? "撤销" : "完成"}：${task.title}`}>{task.status === "done" ? <Check size={15} strokeWidth={3} /> : <span />}</button></div>)}</div></section>
      <aside className="panel weekly-plan-panel"><div className="panel-heading"><div><span className="eyebrow">WEEKLY INTENT</span><h2>本周重点</h2></div><ListChecks size={18} className="panel-icon" /></div><div className="intent-list">{focusGoals && focusGoals.length > 0 ? focusGoals.map((goal, index) => <div className="intent-item" key={goal.id}><span className="intent-number">0{index + 1}</span><div><strong>{goal.title}</strong><p>{goal.description}</p></div></div>) : <div className="intent-item"><span className="intent-number">—</span><div><strong>还没有进行中的目标</strong><p>在计划里创建一个 4-12 周目标，本周重点会从这里出现。</p></div></div>}</div><div className="plan-note"><Sparkles size={15} /><span>建议：今天完成主任务后，不再新增新的计划。</span></div></aside>
     </div>
   </div>;

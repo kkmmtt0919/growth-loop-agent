@@ -34,6 +34,8 @@ export type Task = {
   coin: number;
   status: "done" | "current" | "upcoming";
   kind: TaskKind;
+  /** 完成标准（拆解生成任务有值；demo 数据无） */
+  acceptance?: string | null;
   /** 最后完成时间（真实数据映射时存在；demo 数据无） */
   completedAt?: string | null;
 };

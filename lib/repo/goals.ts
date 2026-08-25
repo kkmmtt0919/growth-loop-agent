@@ -128,3 +128,12 @@ export async function countTasksByGoal(userId: string, goalId: string): Promise<
   const row = rows[0];
   return { total: Number(row?.total ?? 0), done: Number(row?.done ?? 0) };
 }
+
+/** 某目标下已有任务标题列表（Agent Decompose 增量拆：避免生成重复步骤） */
+export async function listTaskTitlesByGoal(userId: string, goalId: string): Promise<string[]> {
+  const { rows } = await getPool().query<{ title: string }>(
+    `select title from public.tasks where user_id = $1 and goal_id = $2 order by created_at asc`,
+    [userId, goalId],
+  );
+  return rows.map((r) => r.title);
+}

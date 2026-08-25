@@ -7,6 +7,7 @@ import {
   mapProfileToSeedUser,
   mapRecordToLearningLog,
   mapTaskToSeedTask,
+  formatRelativeTime,
 } from "@/lib/service/seed";
 
 export const runtime = "nodejs";
@@ -42,7 +43,7 @@ export async function GET(request: Request) {
           account: entry.account,
           amount: entry.amount,
           reason: entry.reason,
-          occurredAt: entry.occurred_at,
+          occurredAt: formatRelativeTime(entry.occurred_at),
         })),
         weeklyBars: demoSeed.weeklyBars,
         insight: demoSeed.insight,

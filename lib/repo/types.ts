@@ -46,6 +46,8 @@ export type DbTask = {
   version: number;
   deadline: string | null;
   frequency: string | null;
+  /** 完成标准（Agent Decompose V1 拆解生成；展示字段，点击展开） */
+  acceptance: string | null;
   /** 最后完成时间（MVP 记录最后完成时间，不代表历史完成轨迹） */
   completed_at: string | null;
   created_at: string;
