@@ -39,3 +39,18 @@ export function dateMinusDays(dateStr: string, days: number): string {
   d.setUTCDate(d.getUTCDate() - days);
   return d.toISOString().slice(0, 10);
 }
+
+/**
+ * 滚动快照起点：取所在周的周一（ISO 周一为一周开始）。
+ * 用 UTC 语义计算偏移避免时区漂移（输入已是 Asia/Shanghai 的 YYYY-MM-DD）。
+ */
+export function weekStartOf(dateStr: string): string {
+  const day = new Date(`${dateStr}T00:00:00Z`).getUTCDay(); // 0=周日,1=周一..6=周六
+  const offset = day === 0 ? 6 : day - 1; // 周一偏移 0，周日偏移 6
+  return dateMinusDays(dateStr, offset);
+}
+
+/** 滚动快照终点：起点 + 6 天（周日） */
+export function weekEndOf(periodStart: string): string {
+  return dateMinusDays(periodStart, -6);
+}

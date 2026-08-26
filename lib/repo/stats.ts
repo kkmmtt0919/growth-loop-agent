@@ -159,3 +159,36 @@ export async function countWindowScopedDoneTasks(userId: string, sinceShanghaiDa
   );
   return Number(rows[0]?.count ?? 0);
 }
+
+/** 某用户某区间（含端点，上海时区）有记录的去重天数（周活跃天数用） */
+export async function countRecordDaysBetween(
+  userId: string,
+  startShanghaiDate: string,
+  endShanghaiDate: string,
+): Promise<number> {
+  const { rows } = await getPool().query<{ count: string }>(
+    `select count(distinct (occurred_at at time zone 'Asia/Shanghai')::date)::text as count
+     from public.records
+     where user_id = $1
+       and (occurred_at at time zone 'Asia/Shanghai')::date >= $2
+       and (occurred_at at time zone 'Asia/Shanghai')::date <= $3`,
+    [userId, startShanghaiDate, endShanghaiDate],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** 某区间（上海时区）内完成的任务按 goal_id 分组计数（周报 goalProgress.doneThisWeek 用） */
+export async function countDoneTasksByGoalSince(
+  userId: string,
+  sinceShanghaiDate: string,
+): Promise<Array<{ goal_id: string | null; count: number }>> {
+  const { rows } = await getPool().query<{ goal_id: string | null; count: string }>(
+    `select goal_id, count(*)::text as count
+     from public.tasks
+     where user_id = $1 and status = 'done' and completed_at is not null
+       and (completed_at at time zone 'Asia/Shanghai')::date >= $2
+     group by goal_id`,
+    [userId, sinceShanghaiDate],
+  );
+  return rows.map((r) => ({ goal_id: r.goal_id, count: Number(r.count) }));
+}

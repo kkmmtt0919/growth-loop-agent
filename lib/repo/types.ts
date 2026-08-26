@@ -90,6 +90,19 @@ export type DbLedgerEntry = {
   created_at: string;
 };
 
+export type DbWeeklyReport = {
+  id: string;
+  user_id: string;
+  period_start: string; // YYYY-MM-DD（周一，滚动快照起点）
+  period_end: string;   // YYYY-MM-DD（周日，滚动快照终点）
+  summary: string;
+  /** 结构化内容 { schemaVersion, stats, summary, achievement[], problem[], suggestion[], goalSuggestions[], replySource }（Phase 5 起） */
+  content: Record<string, unknown> | null;
+  source_count: number;
+  created_at: string;
+  generated_at: string;
+};
+
 export type DbQuizSession = {
   id: string;
   user_id: string;
