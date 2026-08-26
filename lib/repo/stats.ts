@@ -114,3 +114,48 @@ export async function countTasks(userId: string): Promise<number> {
   );
   return Number(rows[0]?.count ?? 0);
 }
+
+/** 近 N 天每日完成任务数（一次聚合，替代 N 次 countDoneTasksOnDay；completed_at 落窗口径） */
+export async function countDoneTasksPerDay(
+  userId: string,
+  sinceShanghaiDate: string,
+): Promise<Array<{ day: string; count: number }>> {
+  const { rows } = await getPool().query<{ day: string; count: string }>(
+    `select (completed_at at time zone 'Asia/Shanghai')::date::text as day,
+            count(*)::text as count
+     from public.tasks
+     where user_id = $1 and status = 'done' and completed_at is not null
+       and (completed_at at time zone 'Asia/Shanghai')::date >= $2
+     group by day`,
+    [userId, sinceShanghaiDate],
+  );
+  return rows.map((r) => ({ day: r.day, count: Number(r.count) }));
+}
+
+/** Phase 4 新口径分母：近 N 天创建或截止的任务数（去重，OR 谓词按行计数天然不重复） */
+export async function countWindowScopedTasks(userId: string, sinceShanghaiDate: string): Promise<number> {
+  const { rows } = await getPool().query<{ count: string }>(
+    `select count(*)::text as count from public.tasks
+     where user_id = $1
+       and (
+         (created_at at time zone 'Asia/Shanghai')::date >= $2
+         or (deadline is not null and deadline >= $2::date)
+       )`,
+    [userId, sinceShanghaiDate],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** Phase 4 新口径分子：近 N 天创建或截止的任务中已完成的数量（status='done'） */
+export async function countWindowScopedDoneTasks(userId: string, sinceShanghaiDate: string): Promise<number> {
+  const { rows } = await getPool().query<{ count: string }>(
+    `select count(*)::text as count from public.tasks
+     where user_id = $1 and status = 'done'
+       and (
+         (created_at at time zone 'Asia/Shanghai')::date >= $2
+         or (deadline is not null and deadline >= $2::date)
+       )`,
+    [userId, sinceShanghaiDate],
+  );
+  return Number(rows[0]?.count ?? 0);
+}

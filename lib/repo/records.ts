@@ -1,5 +1,5 @@
 import { getPool } from "./pool";
-import type { DbRecord } from "./types";
+import type { DbRecord, Mood } from "./types";
 
 export type NewRecordInput = {
   userId: string;
@@ -80,4 +80,92 @@ export async function listRecords(userId: string, limit = 100): Promise<DbRecord
     [userId, limit],
   );
   return rows;
+}
+
+/** 某用户某天（上海时区 YYYY-MM-DD）的记录，occurred_at asc */
+export async function listRecordsOnDay(userId: string, day: string): Promise<DbRecord[]> {
+  const { rows } = await getPool().query<DbRecord>(
+    `select * from public.records
+     where user_id = $1 and (occurred_at at time zone 'Asia/Shanghai')::date = $2
+     order by occurred_at asc`,
+    [userId, day],
+  );
+  return rows;
+}
+
+/** 某用户区间记录（上海时区，from/to 为 YYYY-MM-DD），行带 shanghai_day 分组键，occurred_at asc */
+export async function listRecordsBetween(
+  userId: string,
+  from: string,
+  to: string,
+): Promise<(DbRecord & { shanghai_day: string })[]> {
+  const { rows } = await getPool().query<DbRecord & { shanghai_day: string }>(
+    `select *, (occurred_at at time zone 'Asia/Shanghai')::date::text as shanghai_day
+     from public.records
+     where user_id = $1
+       and (occurred_at at time zone 'Asia/Shanghai')::date >= $2
+       and (occurred_at at time zone 'Asia/Shanghai')::date <= $3
+     order by occurred_at asc`,
+    [userId, from, to],
+  );
+  return rows;
+}
+
+export type RecordsQuery = {
+  from?: string; // YYYY-MM-DD（上海时区口径）
+  to?: string; // YYYY-MM-DD
+  mood?: Mood | null;
+  limit: number;
+  offset: number;
+};
+
+export type RecordsQueryResult = {
+  rows: (DbRecord & { total: string })[];
+};
+
+/** 分页+筛选查询（无 kind 参数；单条 SQL 用 count(*) over() 带总数） */
+export async function queryRecords(userId: string, q: RecordsQuery): Promise<RecordsQueryResult> {
+  const { rows } = await getPool().query<DbRecord & { total: string }>(
+    `select r.*, count(*) over()::text as total
+     from public.records r
+     where r.user_id = $1
+       and (r.occurred_at at time zone 'Asia/Shanghai')::date >= coalesce($2::date, '1970-01-01')
+       and (r.occurred_at at time zone 'Asia/Shanghai')::date <= coalesce($3::date, '9999-12-31')
+       and (r.mood = $4 or $4 is null)
+     order by r.occurred_at desc, r.id desc
+     limit $5 offset $6`,
+    [userId, q.from ?? null, q.to ?? null, q.mood ?? null, q.limit, q.offset],
+  );
+  return { rows };
+}
+
+export type RecordPatch = { mood?: Mood | null; remark?: string | null };
+
+/** 动态白名单更新 mood/remark（只 SET 提供的 key，显式 null = 清除；id+user_id 双条件防越权） */
+export async function patchRecordFields(
+  userId: string,
+  recordId: string,
+  patch: RecordPatch,
+): Promise<DbRecord | null> {
+  const sets: string[] = [];
+  const values: (string | null)[] = [recordId, userId]; // $1=id, $2=user_id
+  let idx = 3;
+  if ("mood" in patch) {
+    sets.push(`mood = $${idx}`);
+    values.push(patch.mood ?? null);
+    idx++;
+  }
+  if ("remark" in patch) {
+    sets.push(`remark = $${idx}`);
+    values.push(patch.remark ?? null);
+    idx++;
+  }
+  if (sets.length === 0) return null;
+  const { rows } = await getPool().query<DbRecord>(
+    `update public.records set ${sets.join(", ")}
+     where id = $1 and user_id = $2
+     returning *`,
+    values,
+  );
+  return rows[0] ?? null;
 }

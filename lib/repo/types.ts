@@ -54,6 +54,9 @@ export type DbTask = {
   updated_at: string;
 };
 
+/** 记录心情枚举（migration 008 CHECK 约束，前端映射 emoji） */
+export type Mood = "great" | "good" | "normal" | "bad" | "terrible";
+
 export type DbRecord = {
   id: string;
   user_id: string;
@@ -69,6 +72,10 @@ export type DbRecord = {
   mode: "llm" | "demo" | "pending";
   occurred_at: string;
   created_at: string;
+  /** 心情枚举（Phase 4，可空，老记录为 null） */
+  mood: Mood | null;
+  /** 备注（Phase 4，可空，应用层限 500） */
+  remark: string | null;
 };
 
 export type DbLedgerEntry = {

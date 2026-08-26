@@ -1395,3 +1395,74 @@ h1 { margin-top: 15px; color: var(--ink); font: 600 clamp(29px, 3.2vw, 40px)/1.1
 }
 .growth-empty-panel h3 { font-size: 16px; margin: 0 0 6px; }
 .growth-empty-panel p { color: var(--ink-soft); font-size: 13px; margin: 0 0 16px; }
+
+/* ============ Phase 4 记录查询页 ============ */
+.records-page { max-width: 760px; margin: 0 auto; padding: 32px 24px 80px; }
+.records-login { padding: 60px 24px; text-align: center; }
+.records-login h2 { margin: 0 0 8px; }
+.records-login p { color: var(--ink-soft); margin: 0 0 20px; }
+
+.records-header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+.records-back { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 13px; text-decoration: none; }
+.records-back:hover { color: var(--coral); }
+.records-header h1 { margin: 0; font-size: 22px; font-weight: 800; }
+.records-tabs { display: inline-flex; gap: 4px; margin-left: auto; background: var(--paper-deep); border-radius: 10px; padding: 3px; }
+.records-tabs button { padding: 7px 16px; border-radius: 8px; font-size: 13px; color: var(--ink-soft); background: transparent; transition: .15s; }
+.records-tabs button.active { background: var(--white); color: var(--ink); box-shadow: var(--shadow); }
+
+.records-summary { display: flex; flex-wrap: wrap; gap: 20px; padding: 16px 18px; background: var(--white); border: 1px solid var(--line); border-radius: 14px; margin-bottom: 20px; font-size: 13px; color: var(--ink-soft); }
+.records-summary strong { color: var(--ink); font-size: 15px; }
+
+.recent-day-list { display: grid; gap: 8px; }
+.recent-day { background: var(--white); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.recent-day-head { width: 100%; display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: transparent; text-align: left; }
+.recent-day-head:hover { background: var(--paper-deep); }
+.recent-day-label { font-weight: 700; font-size: 14px; color: var(--ink); min-width: 44px; }
+.recent-day-date { font: 500 11px 'DM Mono', monospace; color: var(--ink-faint); }
+.recent-day-meta { margin-left: auto; font-size: 12px; color: var(--ink-soft); }
+.recent-day-chev { color: var(--ink-faint); transition: .2s; }
+.recent-day.expanded .recent-day-chev { transform: rotate(90deg); }
+.recent-day.expanded { border-color: var(--coral-soft); }
+.recent-day .record-list { padding: 0 16px 12px; display: grid; gap: 8px; }
+
+.records-history .record-list { display: grid; gap: 10px; }
+.load-more { display: block; margin: 18px auto 8px; padding: 9px 22px; border-radius: 10px; background: var(--paper-deep); color: var(--ink-soft); font-size: 13px; }
+.load-more:hover { background: var(--coral-soft); color: var(--coral); }
+.load-more:disabled { opacity: .5; }
+.records-count { text-align: center; font-size: 12px; color: var(--ink-faint); }
+
+.record-item-query { background: var(--white); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.record-item-query .record-body { width: 100%; }
+.record-item-query .record-topline { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+.record-item-query .record-topline h3 { margin: 0; font-size: 14px; font-weight: 700; color: var(--ink); display: inline-flex; align-items: center; gap: 6px; }
+.record-mood-emoji { font-size: 15px; }
+.record-reward { font: 500 11px 'DM Mono', monospace; color: var(--coral); white-space: nowrap; }
+.record-item-query p { margin: 0 0 8px; font-size: 13px; color: var(--ink-soft); line-height: 1.5; }
+.record-output { color: var(--ink-faint) !important; font-size: 12px !important; }
+.record-remark { margin: 8px 0 !important; padding: 8px 10px; background: var(--paper-deep); border-radius: 8px; font-size: 12px !important; color: var(--ink-soft) !important; font-style: italic; }
+.record-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.record-tags span { font-size: 11px; color: var(--ink-faint); padding: 2px 8px; background: var(--paper-deep); border-radius: 6px; }
+.record-kind-tag { font-weight: 600 !important; }
+.kind-learn { background: rgba(125,165,150,.16) !important; color: var(--sage) !important; }
+.kind-focus { background: var(--coral-soft) !important; color: var(--coral) !important; }
+.kind-exercise { background: rgba(224,178,91,.16) !important; color: var(--gold) !important; }
+.kind-life, .kind-rest { background: var(--paper-deep) !important; color: var(--ink-soft) !important; }
+
+.record-mood-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--line); }
+.mood-chip { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font-size: 16px; background: transparent; transition: .15s; opacity: .5; }
+.mood-chip:hover { background: var(--paper-deep); opacity: 1; }
+.mood-chip.active { background: var(--coral-soft); opacity: 1; transform: scale(1.08); }
+.remark-toggle { margin-left: auto; font-size: 12px; color: var(--ink-faint); padding: 4px 10px; border-radius: 6px; }
+.remark-toggle:hover { color: var(--coral); background: var(--coral-soft); }
+.remark-inline { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.remark-inline input { width: 180px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; background: var(--white); color: var(--ink); }
+.remark-inline input:focus { border-color: var(--coral); outline: none; }
+.remark-inline button { font-size: 12px; padding: 5px 10px; border-radius: 6px; background: var(--paper-deep); color: var(--ink-soft); }
+.remark-inline button:first-of-type { background: var(--coral); color: var(--white); }
+
+.records-empty { text-align: center; padding: 24px; color: var(--ink-faint); font-size: 13px; }
+.records-loading { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 13px; }
+.records-loading .spin { animation: rec-spin 1s linear infinite; }
+@keyframes rec-spin { to { transform: rotate(360deg); } }
+.records-error { color: var(--coral); font-size: 13px; padding: 10px 14px; background: var(--coral-soft); border-radius: 8px; margin-bottom: 12px; }
+.records-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--navy); color: var(--white); padding: 10px 20px; border-radius: 10px; font-size: 13px; box-shadow: var(--shadow); z-index: 50; }
