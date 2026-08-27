@@ -41,3 +41,9 @@ export async function listUserIds(): Promise<string[]> {
   const { rows } = await getPool().query<{ id: string }>(`select id from public.profiles order by created_at asc`);
   return rows.map((r) => r.id);
 }
+
+/** 删除账号：硬删除 profiles 一行，业务数据依赖现有 ON DELETE CASCADE 一并清空 */
+export async function deleteUser(id: string): Promise<boolean> {
+  const { rowCount } = await getPool().query(`delete from public.profiles where id = $1`, [id]);
+  return rowCount === 1;
+}

@@ -1,4 +1,4 @@
-import { createUser, findByEmail, findById, PG_UNIQUE_VIOLATION } from "@/lib/repo/users";
+import { createUser, deleteUser, findByEmail, findById, PG_UNIQUE_VIOLATION } from "@/lib/repo/users";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { signToken } from "@/lib/auth/jwt";
 import type { DbProfile } from "@/lib/repo/types";
@@ -77,4 +77,12 @@ export function toPublicProfile(profile: DbProfile) {
   const { password_hash, ...safe } = profile;
   void password_hash;
   return safe;
+}
+
+/** 删除账号：级联清空业务数据。userId 必须来自 authenticate 的 JWT。 */
+export async function deleteAccount(userId: string): Promise<void> {
+  const deleted = await deleteUser(userId);
+  if (!deleted) {
+    throw new ServiceError("用户不存在", 404);
+  }
 }

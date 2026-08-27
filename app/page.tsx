@@ -28,6 +28,7 @@ import {
   Sparkles,
   Target,
   Timer,
+  Trash2,
   Trophy,
   Undo2,
   WalletCards,
@@ -230,6 +231,12 @@ export default function Home() {
   // Agent 拆解：进行中的目标 id（按钮 loading）+ 最近一次拆解结果（undo 用 state 保存，不依赖 toast）
   const [decomposingGoalId, setDecomposingGoalId] = useState<string | null>(null);
   const [lastDecompose, setLastDecompose] = useState<{ ids: string[]; expireAt: number } | null>(null);
+  // 删除账号确认弹层：expectedEmail 来自 /api/auth/me，inputEmail 由用户输入比对
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteExpectedEmail, setDeleteExpectedEmail] = useState("");
+  const [deleteInputEmail, setDeleteInputEmail] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   useEffect(() => {
     const storedSessionId = window.localStorage.getItem(SESSION_STORAGE_KEY) || `session-${Date.now()}`;
@@ -467,6 +474,49 @@ export default function Home() {
   function logout() {
     window.localStorage.removeItem(AUTH_TOKEN_KEY);
     window.location.reload();
+  }
+
+  // 打开删除账号确认弹层：先 GET /api/auth/me 取权威邮箱做防误触比对（方案乙）
+  async function openDeleteAccount() {
+    setDeleteError("");
+    setDeleteInputEmail("");
+    setDeleteExpectedEmail("");
+    setDeleteOpen(true);
+    try {
+      const res = await fetch("/api/auth/me", { headers: { Authorization: `Bearer ${authToken}` } });
+      const payload = (await res.json()) as { profile?: { email?: string }; error?: string };
+      if (!res.ok || !payload.profile?.email) {
+        setDeleteError(payload.error || "无法获取账号信息，请重新登录后再试");
+        return;
+      }
+      setDeleteExpectedEmail(payload.profile.email);
+    } catch {
+      setDeleteError("无法获取账号信息，请重新登录后再试");
+    }
+  }
+
+  // 确认删除：前端仅做 UX 防误触，真正身份校验在后端 authenticate
+  async function confirmDeleteAccount() {
+    if (deleteInputEmail !== deleteExpectedEmail) return;
+    setDeleteBusy(true);
+    setDeleteError("");
+    try {
+      const res = await fetch("/api/auth/delete", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const payload = (await res.json()) as { deleted?: boolean; error?: string };
+      if (!res.ok || !payload.deleted) {
+        setDeleteError(payload.error || "删除失败，请重试");
+        return;
+      }
+      // 删除成功：复用 logout 清理本地 token 并回到登录页
+      logout();
+    } catch {
+      setDeleteError("网络异常，请稍后重试");
+    } finally {
+      setDeleteBusy(false);
+    }
   }
 
   function togglePomodoro() {
@@ -969,7 +1019,12 @@ export default function Home() {
           <div className="profile-chip">
             <div className="avatar">{demoSeed.user.displayName.slice(0, 1)}</div>
             <div className="profile-meta"><strong>{demoSeed.user.displayName}</strong><span>Lv. {String(currentLevel).padStart(2, "0")} · {demoSeed.user.role}</span></div>
-            {authMode === "ready" && <button className="profile-logout" onClick={logout} aria-label="退出登录" title="退出登录"><LogOut size={15} /></button>}
+            {authMode === "ready" && (
+              <div className="profile-actions">
+                <button className="profile-logout" onClick={logout} aria-label="退出登录" title="退出登录"><LogOut size={15} /></button>
+                <button className="profile-logout" onClick={openDeleteAccount} aria-label="删除账号" title="删除账号"><Trash2 size={15} /></button>
+              </div>
+            )}
           </div>
         </div>
       </aside>
@@ -1040,6 +1095,44 @@ export default function Home() {
         <div className="quiz-overlay-dialog">
           <div className="quiz-overlay-toolbar"><span>正在专注：理解测验</span><button className="quiz-close-button" onClick={closeQuizOverlay}><X size={15} /> 关闭</button></div>
           <LearningQuizCard quiz={activeQuiz} answers={quizAnswers} grade={quizGrade} busy={quizBusy} error={quizError} onAnswer={(id, value) => setQuizAnswers((answers) => ({ ...answers, [id]: value }))} onGrade={gradeQuiz} onReset={resetQuiz} />
+        </div>
+      </div>}
+
+      {deleteOpen && <div className="quiz-overlay" role="dialog" aria-modal="true" aria-label="删除账号">
+        <button className="quiz-overlay-backdrop" aria-label="取消删除" onClick={() => !deleteBusy && setDeleteOpen(false)} />
+        <div className="quiz-overlay-dialog">
+          <div className="quiz-overlay-toolbar"><span>删除账号</span><button className="quiz-close-button" onClick={() => setDeleteOpen(false)} disabled={deleteBusy}><X size={15} /> 关闭</button></div>
+          <div className="delete-account-panel">
+            <h3 className="delete-account-title">永久删除账号</h3>
+            <p className="delete-account-copy">此操作将<strong>永久删除</strong>你的账号，以及所有目标、任务、记录、积分账本与成长报告数据，<strong>无法恢复</strong>。请确认这是你想要的。</p>
+            {deleteExpectedEmail ? (
+              <>
+                <p className="delete-account-hint">请输入你的邮箱 <code>{deleteExpectedEmail}</code> 以确认删除</p>
+                <input
+                  className="delete-account-input"
+                  type="email"
+                  value={deleteInputEmail}
+                  onChange={(e) => setDeleteInputEmail(e.target.value)}
+                  placeholder={deleteExpectedEmail}
+                  disabled={deleteBusy}
+                  autoComplete="off"
+                />
+              </>
+            ) : (
+              <p className="delete-account-hint delete-account-hint-warn">{deleteError || "正在获取账号信息…"}</p>
+            )}
+            {deleteError && deleteExpectedEmail && <p className="delete-account-error">{deleteError}</p>}
+            <div className="delete-account-actions">
+              <button className="quiet-button" onClick={() => setDeleteOpen(false)} disabled={deleteBusy}>取消</button>
+              <button
+                className="delete-account-confirm"
+                onClick={confirmDeleteAccount}
+                disabled={deleteBusy || !deleteExpectedEmail || deleteInputEmail !== deleteExpectedEmail}
+              >
+                {deleteBusy ? "正在删除…" : "永久删除账号"}
+              </button>
+            </div>
+          </div>
         </div>
       </div>}
 
