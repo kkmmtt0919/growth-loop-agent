@@ -5,6 +5,7 @@ import {
   type WeeklyContent,
   type WeeklyStats,
 } from "@/lib/agent/weekly-generator";
+import { hasMeaningfulContext } from "@/lib/agent/core/pure";
 import {
   countDoneTasksByGoalSince,
   countDoneTasksSince,
@@ -192,7 +193,17 @@ export async function generateWeeklyReport(userId: string): Promise<WeeklyReport
   const contextText = weeklyContextToText(context);
   const fallback = ruleFallback(stats);
 
-  const { text, goalSuggestions, replySource } = await generateWeeklyDigest(contextText, statsToText(stats));
+  // 空上下文短路：无任何业务数据时跳过 LLM 调用，直接规则回退
+  const meaningful = hasMeaningfulContext({
+    hasGoal: stats.goalProgress.length > 0,
+    hasTasks: stats.windowTotal > 0,
+    hasRecords: stats.recordCount > 0,
+  });
+
+  const digest = meaningful
+    ? await generateWeeklyDigest(contextText, statsToText(stats))
+    : { text: null, goalSuggestions: [], replySource: "rules" as const };
+  const { text, goalSuggestions, replySource } = digest;
   const finalReplySource = text ? replySource : ("rules" as const);
 
   const goalSuggestionsValid: NonNullable<WeeklyContent["goalSuggestions"]> = [];

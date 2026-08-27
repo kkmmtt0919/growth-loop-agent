@@ -189,6 +189,14 @@ Android Emulator 不使用电脑的局域网 IP，默认使用 `10.0.2.2:3000`�
 - 微信回调的加密模式、重放保护、限流和审计；
 - release Android 签名和真机回归。
 
+数据库迁移（PostgreSQL）：本仓库使用 `supabase/migrations/` 下的 SQL 文件建表。每次部署到新环境后，需要按编号顺序重放尚未执行的迁移文件，例如：
+
+```bash
+node scripts/run-migration.mjs supabase/migrations/009_weekly_reports.sql
+```
+
+新环境应把 `supabase/migrations/` 下的迁移从 `001` 开始逐个执行到最新；已在其它环境执行过的文件可以跳过（迁移脚本依赖表的唯一约束保证幂等）。表结构变更务必随代码一起提交迁移文件，部署时先跑迁移、再启动服务。
+
 当前仓库仍是原型，不能把本地 demo 数据当成生产数据层。
 
 ## 9. 常见问题

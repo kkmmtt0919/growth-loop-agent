@@ -1,4 +1,6 @@
 import { readConfig } from "./provider";
+import { extractJson, isEveningContent } from "./core/pure";
+import type { EveningContent } from "./core/pure";
 
 /**
  * 晚报结构化生成（Phase 2，核心）。
@@ -6,57 +8,9 @@ import { readConfig } from "./provider";
  * 边界：只输出 evaluation（文字评价），不输出数值分（score 不参与业务）。
  */
 
-export type EveningContent = {
-  summary: string;
-  achievement: string[];
-  problem: string[];
-  suggestion: string[];
-  evaluation: string;
-};
-
-/** Schema 校验：类型不符即失败（走规则回退） */
-export function isEveningContent(value: unknown): value is EveningContent {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    typeof v.summary === "string" &&
-    Array.isArray(v.achievement) &&
-    v.achievement.every((x) => typeof x === "string") &&
-    Array.isArray(v.problem) &&
-    v.problem.every((x) => typeof x === "string") &&
-    Array.isArray(v.suggestion) &&
-    v.suggestion.every((x) => typeof x === "string") &&
-    typeof v.evaluation === "string"
-  );
-}
-
-/** 从 LLM 回复中提取 JSON（容错：直接解析 → ```json 块 → 花括号区间） */
-export function extractJson(text: string): unknown {
-  const trimmed = text.trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    // 忽略，尝试下一种
-  }
-  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence?.[1]) {
-    try {
-      return JSON.parse(fence[1].trim());
-    } catch {
-      // 忽略
-    }
-  }
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    try {
-      return JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
-    } catch {
-      // 忽略
-    }
-  }
-  return null;
-}
+// 纯函数/类型从 core/pure 抽离，re-export 保持对外 API 不变
+export { extractJson, isEveningContent };
+export type { EveningContent };
 
 const SYSTEM_PROMPT = `你是成长回路的成长教练。根据用户的真实数据（目标、任务、今日记录、近 7 天统计、最近晚报）生成当晚成长反馈。
 

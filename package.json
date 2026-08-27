@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "eval": "tsx eval/run.ts",
     "android:status": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/android-emulator.ps1 -Action status",
     "android:debug": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/android-emulator.ps1 -Action run -Build",
     "android:run": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/android-emulator.ps1 -Action run",
@@ -35,6 +36,7 @@
     "@types/react-dom": "19.2.4",
     "eslint": "9.17.0",
     "eslint-config-next": "16.3.0",
+    "tsx": "^4.19.2",
     "typescript": "5.7.2"
   }
 }

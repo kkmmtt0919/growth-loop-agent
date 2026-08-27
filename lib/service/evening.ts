@@ -1,4 +1,5 @@
 import { generateEveningDigest, type EveningContent } from "@/lib/agent/evening-generator";
+import { hasMeaningfulContext } from "@/lib/agent/core/pure";
 import { getReportByDate, upsertTodayReport, type DbEveningReport } from "@/lib/repo/evening";
 import { ServiceError } from "./errors";
 import { buildAgentContext, contextToText, type AgentContext } from "./context";
@@ -49,7 +50,16 @@ export async function generateEveningReport(userId: string): Promise<EveningRepo
   const contextText = contextToText(context);
   const fallback = ruleFallbackContent(context);
 
-  const { content, replySource } = await generateEveningDigest(contextText, fallback);
+  // 空上下文短路：无任何业务数据时跳过 LLM 调用，直接规则回退（省外呼、避免无事实输入下编造）
+  const meaningful = hasMeaningfulContext({
+    hasGoal: context.goal !== null,
+    hasTasks: context.tasks.length > 0,
+    hasRecords: context.todayRecords.length > 0,
+  });
+
+  const { content, replySource } = meaningful
+    ? await generateEveningDigest(contextText, fallback)
+    : { content: fallback, replySource: "rules" as const };
   if (replySource === "rules") {
     // 规则回退时在 summary 里保留完整上下文，用户仍能看到今天发生了什么
     content.summary = `${fallback.summary}\n\n${contextText}`;

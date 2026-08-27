@@ -1,5 +1,6 @@
 import { readConfig } from "./provider";
-import { extractJson } from "./evening-generator";
+import { extractJson, extractWeeklyText, isValidGoalSuggestion } from "./core/pure";
+import type { WeeklyContent } from "./core/pure";
 
 /**
  * 周报结构化生成（Phase 5）。
@@ -7,111 +8,10 @@ import { extractJson } from "./evening-generator";
  * 边界（与晚报一致）：只输出文字总结，不输出数值分；stats 始终由规则引擎提供、不信任 LLM 数字。
  */
 
-export const WEEKLY_SCHEMA_VERSION = 1;
-export const MAX_GOAL_SUGGESTION_TITLE = 40;
-
-/** 固定结构：LLM 不得自由发挥（v2 仅支持 update_title，archive 暂不支持） */
-export type GoalSuggestion = {
-  goalId: string;
-  action: "update_title";
-  newTitle: string;
-  reason: string;
-};
-
-export type WeeklyContent = {
-  schemaVersion: number;
-  stats: WeeklyStats;
-  summary: string;
-  achievement: string[];
-  problem: string[];
-  suggestion: string[];
-  goalSuggestions: GoalSuggestion[];
-  replySource: "llm" | "rules";
-};
-
-export type WeeklyStats = {
-  periodStart: string;
-  periodEnd: string;
-  activeDays: number;
-  recordCount: number;
-  minutes: number;
-  doneTasks: number;
-  windowTotal: number;
-  /** 计划执行率 = round(doneTasks / max(1, windowTotal) * 100) */
-  completionRate: number;
-  streak: number;
-  goalProgress: Array<{
-    goalId: string;
-    title: string;
-    status: string;
-    progress: number;
-    doneThisWeek: number;
-  }>;
-  vsPrevWeek: {
-    recordCount: number;
-    minutes: number;
-    doneTasks: number;
-    completionRate: number;
-  };
-};
-
-/** 纯函数：组装最终 content（stats 永远用规则值，只取 LLM 文字字段） */
-export function buildWeeklyContent(
-  stats: WeeklyStats,
-  text: Pick<WeeklyContent, "summary" | "achievement" | "problem" | "suggestion">,
-  goalSuggestions: GoalSuggestion[],
-  replySource: "llm" | "rules",
-): WeeklyContent {
-  return {
-    schemaVersion: WEEKLY_SCHEMA_VERSION,
-    stats,
-    summary: text.summary,
-    achievement: text.achievement,
-    problem: text.problem,
-    suggestion: text.suggestion,
-    goalSuggestions,
-    replySource,
-  };
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((x) => typeof x === "string");
-}
-
-/** UUID 合法性（goalId 将进入 SQL uuid 列，非法值会触发 string_to_uuid 异常，须在入库前过滤） */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** 单条建议结构校验（action 白名单 + goalId 必须是 UUID + newTitle 非空且 ≤40 字） */
-export function isValidGoalSuggestion(value: unknown): value is GoalSuggestion {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    typeof v.goalId === "string" &&
-    UUID_RE.test(v.goalId) &&
-    v.action === "update_title" &&
-    typeof v.newTitle === "string" &&
-    v.newTitle.trim().length > 0 &&
-    v.newTitle.length <= MAX_GOAL_SUGGESTION_TITLE &&
-    typeof v.reason === "string"
-  );
-}
-
-/**
- * 服务端校验：LLM 原始对象 → 文字字段 + 合法建议。
- * 不合法的字段丢弃（summary 缺失则视为整体失败）；返回 null 表示应走规则回退。
- */
-export function extractWeeklyText(raw: unknown): Pick<WeeklyContent, "summary" | "achievement" | "problem" | "suggestion"> | null {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
-  const v = raw as Record<string, unknown>;
-  if (typeof v.summary !== "string") return null;
-  if (!isStringArray(v.achievement) || !isStringArray(v.problem) || !isStringArray(v.suggestion)) return null;
-  return {
-    summary: v.summary,
-    achievement: v.achievement,
-    problem: v.problem,
-    suggestion: v.suggestion,
-  };
-}
+// 纯函数/类型从 core/pure 抽离，re-export 保持对外 API 不变
+export { buildWeeklyContent, WEEKLY_SCHEMA_VERSION, MAX_GOAL_SUGGESTION_TITLE } from "./core/pure";
+export type { GoalSuggestion, WeeklyContent, WeeklyStats } from "./core/pure";
+export { extractJson, extractWeeklyText, isValidGoalSuggestion };
 
 export type WeeklyDigestResult = {
   /** LLM 文字字段（已校验）；若 null 表示整体失败需回退 */
