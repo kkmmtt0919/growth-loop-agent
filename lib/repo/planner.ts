@@ -571,3 +571,80 @@ export async function batchDeleteActions(userId: string, actionIds: string[]): P
   );
   return rowCount ?? 0;
 }
+
+// ---------------------------------------------------------------------------
+// Plan accept / reset（Smart Planner Step 3）
+// ---------------------------------------------------------------------------
+
+/**
+ * 接受计划（单事务）：插入 schedules（source='action'）+ 对应 action pending→planned。
+ * 审核边界（DESIGN_SMART_PLANNER_STEP3 §0.3/4）：
+ *   - Preview 阶段零落库，只有这里才写；事务保证「schedule 写了但 action 没改」不会发生；
+ *   - actions 仅当 status='pending' 才被推进（重复 accept 的已 planned action 自然跳过 = 幂等）。
+ * items 的归属/来源校验在 Service 层完成（action 属于该 goal/用户），本函数只做参数化写入。
+ */
+export async function acceptPlanTx(
+  userId: string,
+  goalId: string,
+  items: CreateScheduleInput[],
+  pendingActionIds: string[],
+): Promise<{ schedules: DbSchedule[]; updatedActions: number }> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const schedules: DbSchedule[] = [];
+    for (const it of items) {
+      const { rows } = await client.query<DbSchedule>(
+        `insert into public.schedules (user_id, action_id, goal_id, source, date, start_time, end_time, title)
+         values ($1, $2, $3, 'action', $4::date, $5::time, $6::time, $7)
+         returning ${SCHEDULE_COLUMNS}`,
+        [userId, it.actionId ?? null, it.goalId ?? null, it.date, it.startTime, it.endTime, it.title],
+      );
+      schedules.push(rows[0]);
+    }
+    const { rowCount } = await client.query(
+      `update public.actions set status = 'planned', updated_at = now()
+       where user_id = $1 and goal_id = $2 and id = any($3::uuid[]) and status = 'pending'`,
+      [userId, goalId, pendingActionIds],
+    );
+    await client.query("commit");
+    return { schedules, updatedActions: rowCount ?? 0 };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * 撤销安排（单事务）：清空该目标「计划中」的 action 排程并回退阶段状态。
+ * 审核边界（§0.2）：只删 `source='action' and status='planned'` 的 schedules，
+ * **绝不碰 source='manual'**（手动日程与 Planner 无关）；已完成 schedule / completed action 不动。
+ */
+export async function resetGoalPlanTx(
+  userId: string,
+  goalId: string,
+): Promise<{ removedSchedules: number; resetActions: number }> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const del = await client.query(
+      `delete from public.schedules
+       where user_id = $1 and goal_id = $2 and source = 'action' and status = 'planned'`,
+      [userId, goalId],
+    );
+    const upd = await client.query(
+      `update public.actions set status = 'pending', updated_at = now()
+       where user_id = $1 and goal_id = $2 and status = 'planned'`,
+      [userId, goalId],
+    );
+    await client.query("commit");
+    return { removedSchedules: del.rowCount ?? 0, resetActions: upd.rowCount ?? 0 };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
