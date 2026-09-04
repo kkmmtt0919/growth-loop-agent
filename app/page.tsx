@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Capacitor } from "@capacitor/core";
 import {
   ArrowUpRight,
@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { demoSeed, initialTasks, todayShanghaiDateLabel, todayShanghaiWeekdayLabel, type Goal, type Task, type TaskKind } from "@/lib/demo-data";
 import type { QuizGrade, QuizQuestion } from "@/lib/agent/quiz";
+import ChatPanel from "./chat-panel";
 import MobileAppShell, { type MobileTab } from "./mobile-shell";
 
 type Tab = MobileTab;
@@ -220,6 +221,8 @@ export default function Home() {
   const sessionIdRef = useRef("anonymous");
   const [authMode, setAuthMode] = useState<AuthMode>("loading");
   const [authToken, setAuthToken] = useState<string | null>(null);
+  /** 聊天面板开关（消息图标入口） */
+  const [chatOpen, setChatOpen] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [evening, setEvening] = useState<EveningCardState>({ state: "loading" });
@@ -957,29 +960,39 @@ export default function Home() {
   }
 
   if (isMobileExperience) {
-    return <MobileAppShell
-      activeTab={activeTab}
-      onNavigate={(tab) => setActiveTab(tab)}
-      tasks={tasks}
-      goals={goals}
-      logs={logs}
-      doneCount={doneCount}
-      earnedCoins={earnedCoins}
-      input={input}
-      setInput={setInput}
-      onSubmit={submitLog}
-      onToggleTask={toggleTask}
-      onAgentGoal={handleAgentGoal}
-      assistantReply={assistantReply}
-      isAgentBusy={isAgentBusy}
-      reviewEnabled={reviewEnabled}
-      onToggleReview={toggleReviewSchedule}
-      onStartReview={startEveningReview}
-      eveningTime={eveningTime}
-      isFocusRunning={isFocusRunning}
-      onToggleFocus={toggleFocusSession}
-      toast={toast}
-    />;
+    return <>
+      <MobileAppShell
+        activeTab={activeTab}
+        onNavigate={(tab) => setActiveTab(tab)}
+        tasks={tasks}
+        goals={goals}
+        logs={logs}
+        doneCount={doneCount}
+        earnedCoins={earnedCoins}
+        input={input}
+        setInput={setInput}
+        onSubmit={submitLog}
+        onToggleTask={toggleTask}
+        onAgentGoal={handleAgentGoal}
+        assistantReply={assistantReply}
+        isAgentBusy={isAgentBusy}
+        reviewEnabled={reviewEnabled}
+        onToggleReview={toggleReviewSchedule}
+        onStartReview={startEveningReview}
+        eveningTime={eveningTime}
+        isFocusRunning={isFocusRunning}
+        onToggleFocus={toggleFocusSession}
+        toast={toast}
+        onOpenChat={() => {
+          if (authMode !== "ready" || !authToken) {
+            notify("请先登录后再与 AI 聊天");
+            return;
+          }
+          setChatOpen(true);
+        }}
+      />
+      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} authToken={authToken} onNotify={notify} />
+    </>;
   }
 
   return (
@@ -1033,7 +1046,7 @@ export default function Home() {
         <header className="topbar">
           <div className="mobile-brand"><div className="brand-mark"><Sparkles size={15} /></div><span>成长回路</span></div>
           <div className="date-stamp">{todayShanghaiDateLabel()} <span>·</span> {todayShanghaiWeekdayLabel()}</div>
-          <div className="topbar-actions"><span className="ai-online-pill"><span /> AI 在线</span><button className="icon-button" aria-label="打开消息" onClick={() => notify(reviewEnabled ? `下一次 AI 晚间回顾：今天 ${eveningTime}` : "晚间回顾目前已关闭") }><MessageCircle size={18} /></button><div className="avatar avatar-small">{demoSeed.user.displayName.slice(0, 1)}</div></div>
+          <div className="topbar-actions"><span className="ai-online-pill"><span /> AI 在线</span><button className="icon-button" aria-label="打开消息" onClick={() => { if (authMode !== "ready" || !authToken) { notify("请先登录后再与 AI 聊天"); return; } setChatOpen(true); } }><MessageCircle size={18} /></button><div className="avatar avatar-small">{demoSeed.user.displayName.slice(0, 1)}</div></div>
         </header>
 
         <div className="content-wrap">
@@ -1143,6 +1156,8 @@ export default function Home() {
           <button onClick={undoDecompose}>撤销 <Undo2 size={13} /></button>
         </div>
       )}
+
+      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} authToken={authToken} onNotify={notify} />
     </main>
   );
 }
@@ -1282,8 +1297,8 @@ function renderTaskKindIcon(kind: TaskKind, size: number) {
   return <Target size={size} />;
 }
 
-function WorkspaceHeader({ eyebrow, title, description, onBackToToday }: { eyebrow: string; title: string; description: string; onBackToToday: () => void }) {
-  return <div className="workspace-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><button className="quiet-button" onClick={onBackToToday}><LayoutDashboard size={15} /> 回到今日</button></div>;
+function WorkspaceHeader({ eyebrow, title, description, onBackToToday, action }: { eyebrow: string; title: string; description: string; onBackToToday?: () => void; action?: ReactNode }) {
+  return <div className="workspace-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><div className="workspace-heading-actions">{action}{onBackToToday ? <button className="quiet-button" onClick={onBackToToday}><LayoutDashboard size={15} /> 回到今日</button> : null}</div></div>;
 }
 
 function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpdateGoal, onDeleteGoal, onAgentGoal, onDecomposeGoal, decomposingGoalId, onBackToToday }: {
@@ -1297,7 +1312,7 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
   onAgentGoal: () => void;
   onDecomposeGoal: (goalId: string) => void;
   decomposingGoalId: string | null;
-  onBackToToday: () => void;
+  onBackToToday?: () => void;
 }) {
   const completed = tasks.filter((task) => task.status === "done").length;
   const [showForm, setShowForm] = useState(false);
@@ -1331,8 +1346,8 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
   }
 
   return <div className="workspace-page">
-    <WorkspaceHeader eyebrow="PLAN BOARD" title="计划地图" description="先看目标，再看今天要落地的那一步。" onBackToToday={onBackToToday} />
-    <div className="goal-grid-head"><span>你的真实目标 · 进度按任务完成率派生</span><button className="quiet-button" onClick={startCreate}><Plus size={14} /> 新建目标</button></div>
+    <WorkspaceHeader eyebrow="PLAN BOARD" title="计划地图" description="先看目标，再看今天要落地的那一步。" onBackToToday={onBackToToday} action={<button className="quiet-button" onClick={startCreate}><Plus size={14} /> 新建目标</button>} />
+    <div className="goal-grid-head"><span>你的真实目标 · 进度按任务完成率派生</span></div>
     <div className="goal-grid">
       {goals.map((goal) => <article className="goal-card" key={goal.id}><div className="goal-card-top"><span className="goal-status">{goal.status}</span><span className="goal-horizon">{goal.horizon || "未设周期"}</span></div><h3>{goal.title}</h3><p>{goal.description || "还没有描述"}</p><div className="goal-progress-row"><span>当前进度</span><strong>{goal.progress}%</strong></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="goal-footer"><span><Target size={13} /> {goal.taskCount ?? 0} 个任务 · {goal.doneCount ?? 0} 完成</span><div className="goal-actions"><button className="text-button" onClick={() => startEdit(goal)}>编辑</button><button className="text-button" onClick={() => onDeleteGoal(goal.id)}>删除</button><button className="text-button" disabled={decomposingGoalId !== null} onClick={() => onDecomposeGoal(goal.id)}>{decomposingGoalId === goal.id ? "拆解中…" : "拆成行动"} <ChevronRight size={14} /></button></div></div></article>)}
       {goals.length === 0 && <article className="goal-card goal-card-empty"><h3>还没有目标</h3><p>创建一个 4–12 周目标，计划地图会从这里长出真实的下一步。</p><button className="primary-button" onClick={startCreate}>创建第一个目标 <ArrowUpRight size={15} /></button></article>}

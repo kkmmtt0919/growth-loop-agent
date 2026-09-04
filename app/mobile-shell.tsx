@@ -16,6 +16,7 @@ import {
   Flame,
   Home as HomeIcon,
   LayoutDashboard,
+  MessageCircle,
   Moon,
   MoreHorizontal,
   Plus,
@@ -63,6 +64,8 @@ type MobileAppShellProps = {
   isFocusRunning: boolean;
   onToggleFocus: () => void;
   toast: string;
+  /** 点击消息图标（登录校验在 page 层统一做，未登录提示「请先登录」） */
+  onOpenChat: () => void;
 };
 
 const mobileTabs: Array<{ label: MobileTab; icon: typeof LayoutDashboard; short: string }> = [
@@ -94,6 +97,7 @@ export default function MobileAppShell({
   isFocusRunning,
   onToggleFocus,
   toast,
+  onOpenChat,
 }: MobileAppShellProps) {
   const [composerOpen, setComposerOpen] = useState(false);
 
@@ -121,6 +125,7 @@ export default function MobileAppShell({
         </div>
         <div className="app-mobile-v3-top-actions">
           <span className="app-mobile-v3-streak"><Flame size={14} /> {demoSeed.user.streak}</span>
+          <button className="app-mobile-v3-chat" aria-label="和 AI 聊天" onClick={onOpenChat}><MessageCircle size={17} /></button>
           <button className="app-mobile-v3-avatar" aria-label="打开个人资料">{demoSeed.user.displayName.slice(0, 1)}</button>
         </div>
       </header>
