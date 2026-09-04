@@ -1,5 +1,15 @@
 import { getGoal } from "@/lib/repo/goals";
-import { createActionsWithDepsTx, listActionsByGoal, type DbAction } from "@/lib/repo/planner";
+import {
+  createActionsWithDepsTx,
+  listActionsByGoal,
+  getAction,
+  updateAction,
+  listActionsByUser,
+  listDependenciesByUser,
+  listDependenciesByGoal,
+  batchDeleteActions,
+  type DbAction,
+} from "@/lib/repo/planner";
 import type { DbGoal } from "@/lib/repo/types";
 import { generateActionPlan } from "@/lib/agent/action-plan-generator";
 import { actionStageRange } from "@/lib/agent/core/pure";
@@ -85,17 +95,30 @@ export async function decomposeToActions(userId: string, goalId: string): Promis
     })),
   );
 
-  // 依赖 id → 标题（供前端直接展示「依赖：确定方向」）
+  const views = buildActionViews(actions, dependencies);
+  return { count: views.length, source, skipped, actions: views };
+}
+
+export type ResolvedDependencyLike = { actionId: string; dependsOnActionId: string };
+
+/**
+ * 组装 ActionView（DbAction[] + 依赖 → 前端视图）。
+ * generate（新生成）/ list（回显）/ goals.deriveView（卡片内嵌）共用，避免三处各自拼装。
+ */
+export function buildActionViews(
+  actions: DbAction[],
+  deps: ResolvedDependencyLike[],
+): ActionView[] {
   const titleById = new Map(actions.map((a) => [a.id, a.title]));
   const depsByAction = new Map<string, string[]>();
-  for (const dep of dependencies) {
-    const list = depsByAction.get(dep.actionId) ?? [];
+  for (const dep of deps) {
     const title = titleById.get(dep.dependsOnActionId);
-    if (title) list.push(title);
+    if (!title) continue; // 依赖目标不在本批视图内 → 忽略（跨目标依赖不存在）
+    const list = depsByAction.get(dep.actionId) ?? [];
+    if (!list.includes(title)) list.push(title);
     depsByAction.set(dep.actionId, list);
   }
-
-  const views: ActionView[] = actions.map((a) => ({
+  return actions.map((a) => ({
     id: a.id,
     goalId: a.goal_id,
     title: a.title,
@@ -108,6 +131,37 @@ export async function decomposeToActions(userId: string, goalId: string): Promis
     createdAt: a.created_at,
     dependsOnTitles: depsByAction.get(a.id) ?? [],
   }));
+}
 
-  return { count: views.length, source, skipped, actions: views };
+/** 回显行动路线：当前用户全部（可选按目标过滤）。GET /api/actions?goal_ids= */
+export async function listActionViews(userId: string, goalIds?: string[]): Promise<ActionView[]> {
+  const [actions, deps] = await Promise.all([listActionsByUser(userId), listDependenciesByUser(userId)]);
+  const filtered = goalIds && goalIds.length > 0 ? actions.filter((a) => goalIds.includes(a.goal_id)) : actions;
+  return buildActionViews(filtered, deps.map((d) => ({ actionId: d.action_id, dependsOnActionId: d.depends_on })));
+}
+
+/**
+ * 手动标记 Action 完成 / 撤销完成（D5：不入 records/账本，只记 completed_at）。
+ * 状态白名单仅 'completed' | 'pending'（Action 是「阶段是否完成」语义，非执行状态）；
+ * planned（已进入 Planner 排程，Step 3 才会出现）拒绝手动切换；
+ * **不做依赖校验**（依赖是 Planner 建议，不限制用户线性跳跃）。
+ */
+export async function setActionStatus(
+  userId: string,
+  actionId: string,
+  status: "completed" | "pending",
+): Promise<ActionView> {
+  const action = await getAction(userId, actionId);
+  if (!action) throw new ServiceError("行动阶段不存在", 404);
+  if (action.status === "planned") throw new ServiceError("该阶段已安排计划，请先撤销安排再操作", 409);
+  const updated = await updateAction(userId, actionId, { status });
+  if (!updated) throw new ServiceError("行动阶段不存在", 404);
+  const deps = await listDependenciesByGoal(userId, updated.goal_id);
+  const view = buildActionViews([updated], deps.map((d) => ({ actionId: d.action_id, dependsOnActionId: d.depends_on })));
+  return view[0];
+}
+
+/** 整批撤销行动路线（undo）。幂等：ids 中越权/不存在的自动忽略，返回实际删除数。 */
+export async function removeActions(userId: string, actionIds: string[]): Promise<number> {
+  return batchDeleteActions(userId, actionIds);
 }

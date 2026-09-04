@@ -1,11 +1,15 @@
 import { countTasksByGoal, createGoal, deleteGoal, getGoal, listGoals, updateGoal } from "@/lib/repo/goals";
+import { listActionsByGoal, listDependenciesByGoal } from "@/lib/repo/planner";
 import type { DbGoal } from "@/lib/repo/types";
+import { buildActionViews, type ActionView } from "./action-decompose";
 import { ServiceError } from "./errors";
 
 /**
- * 目标业务服务（Phase 1）。
- * 决策（docs/DESIGN_PHASE1_PLAN_REAL.md v2）：
+ * 目标业务服务（Phase 1 + Smart Planner Step 2c）。
+ * 决策（docs/DESIGN_PHASE1_PLAN_REAL.md v2 + DESIGN_SMART_PLANNER_STEP2C.md §0）：
  * - progress 是 legacy cache，业务不写；API 返回派生 progress/taskCount/doneCount（事实来源 tasks.status）
+ * - Step 2c（D3 定稿）：**Goal 进度 = Action 完成率**；无 actions 有旧 tasks → 退回 tasks 派生；都无 → 0。
+ *   GoalView 内嵌 actions（后端聚合，前端不做双接口 merge —— 用户审核 §七）
  * - status 保留中文枚举，通过 GOAL_STATUS 常量引用，代码不散落中文
  * - 按 id 操作一律 id + user_id（隔离；跨用户返回 404）
  */
@@ -21,7 +25,13 @@ export type GoalStatus = (typeof GOAL_STATUS)[keyof typeof GOAL_STATUS];
 export type GoalView = DbGoal & {
   taskCount: number;
   doneCount: number;
-  /** 派生进度 0-100（无任务时为 0，全 done 为 100） */
+  /** 行动阶段数（Step 2c，D3） */
+  actionCount: number;
+  /** 已完成行动阶段数 */
+  actionDoneCount: number;
+  /** 行动路线（Step 2c 内嵌） */
+  actions: ActionView[];
+  /** 派生进度 0-100：有 actions → Action 完成率；否则 tasks 完成率（无任务 0） */
   progress: number;
 };
 
@@ -39,10 +49,33 @@ function assertValidDates(startDate?: string | null, endDate?: string | null) {
   }
 }
 
+/** 派生视图：tasks 计数 + 行动路线内嵌 + progress 规则（D3）。per-goal 查询（MVP 目标量级小，接受 N 次） */
 async function deriveView(goal: DbGoal): Promise<GoalView> {
-  const { total, done } = await countTasksByGoal(goal.user_id, goal.id);
-  const progress = total === 0 ? 0 : Math.round((done / total) * 100);
-  return { ...goal, taskCount: total, doneCount: done, progress };
+  const [t, actions, deps] = await Promise.all([
+    countTasksByGoal(goal.user_id, goal.id),
+    listActionsByGoal(goal.user_id, goal.id),
+    listDependenciesByGoal(goal.user_id, goal.id),
+  ]);
+  const views = buildActionViews(
+    actions,
+    deps.map((d) => ({ actionId: d.action_id, dependsOnActionId: d.depends_on })),
+  );
+  const actionDone = views.filter((v) => v.status === "completed").length;
+  let progress: number;
+  if (views.length > 0) {
+    progress = Math.round((actionDone / views.length) * 100);
+  } else {
+    progress = t.total === 0 ? 0 : Math.round((t.done / t.total) * 100);
+  }
+  return {
+    ...goal,
+    taskCount: t.total,
+    doneCount: t.done,
+    actionCount: views.length,
+    actionDoneCount: actionDone,
+    actions: views,
+    progress,
+  };
 }
 
 export type CreateGoalInput = {

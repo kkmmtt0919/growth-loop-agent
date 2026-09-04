@@ -317,6 +317,8 @@ export async function deleteAction(userId: string, actionId: string): Promise<bo
 // action_dependencies：依赖关系（多对多）
 // ---------------------------------------------------------------------------
 
+const DEP_COLUMNS = `id, user_id, action_id, depends_on, created_at`;
+
 /**
  * 整组替换某 action 的依赖（事务：先删后插）。decompose/planner 生成依赖时调用，
  * 天然幂等——同组覆盖，不需要先读再算差异。
@@ -526,4 +528,46 @@ export async function replaceAvailability(userId: string, items: CreateAvailabil
   } finally {
     client.release();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Action 读/删扩展（Step 2c：Goal 页行动路线回显 + undo 整批撤销）
+// ---------------------------------------------------------------------------
+
+/** 当前用户全部行动（供按目标内嵌 / 全量回显；按 created_at 稳定序） */
+export async function listActionsByUser(userId: string): Promise<DbAction[]> {
+  const { rows } = await getPool().query<DbAction>(
+    `select ${ACTION_COLUMNS}
+     from public.actions
+     where user_id = $1
+     order by sort_order asc, created_at asc`,
+    [userId],
+  );
+  return rows;
+}
+
+/** 当前用户全部依赖（组装 ActionView.dependsOnTitles 用） */
+export async function listDependenciesByUser(userId: string): Promise<DbActionDependency[]> {
+  const { rows } = await getPool().query<DbActionDependency>(
+    `select ${DEP_COLUMNS}
+     from public.action_dependencies
+     where user_id = $1
+     order by created_at asc`,
+    [userId],
+  );
+  return rows;
+}
+
+/**
+ * 整批删除行动（「制定行动路线」undo / 清理用）。
+ * 011 两个 FK（action_id / depends_on）都是 on delete cascade → 删 action 自动清理两侧依赖行。
+ * 返回实际删除数；越权 id（非本人）不计数。
+ */
+export async function batchDeleteActions(userId: string, actionIds: string[]): Promise<number> {
+  if (actionIds.length === 0) return 0;
+  const { rowCount } = await getPool().query(
+    `delete from public.actions where user_id = $1 and id = any($2::uuid[])`,
+    [userId, actionIds],
+  );
+  return rowCount ?? 0;
 }
