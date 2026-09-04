@@ -132,6 +132,50 @@ function formatActionMinutes(min: number): string {
   return `${min} 分钟`;
 }
 
+// ===================== Smart Planner Step 3 前端类型（镜像后端） =====================
+
+type AvailabilityRow = { weekday: number; startTime: string; endTime: string; type: "learn" | "work" | "exercise" | "life" | "rest"; title: string };
+
+type PlanFeasibility = {
+  totalMinutes: number;
+  remainingDays: number;
+  requiredPerDay: number;
+  shortTermPerDay: number;
+  longTermPerDay: number;
+  verdict: "on-track" | "tight" | "risk";
+  weeksNeeded: number | null;
+  hasDeadline: boolean;
+  message: string;
+};
+
+type PlanItemDraft = { actionId: string; title: string; date: string; startTime: string; endTime: string };
+
+type PlanPreviewData = {
+  blocked?: "no-availability" | "no-pending";
+  message?: string;
+  feasibility: PlanFeasibility | null;
+  items: PlanItemDraft[];
+  remainingMinutes?: Record<string, number>;
+  source: "llm" | "rules";
+  pendingCount?: number;
+};
+
+/** Planner 弹层会话（验收 C：关闭即清，不缓存成已安排） */
+type PlanSession = { goal: PlanGoal; step: "loading" | "preview" | "blocked" | "ask-replan" | "error"; data: PlanPreviewData | null; error?: string };
+
+const WEEKDAY_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+
+/** YYYY-MM-DD → "9月7日 周一"（UTC 解析防时区偏移） */
+function formatPlanDate(dateStr: string): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  const wd = (d.getUTCDay() + 6) % 7;
+  return `${d.getUTCMonth() + 1}月${d.getUTCDate()}日 ${WEEKDAY_LABELS[wd]}`;
+}
+
+function hasPlannedAction(goal: PlanGoal): boolean {
+  return (goal.actions ?? []).some((a) => a.status === "planned");
+}
+
 /** 目标创建/编辑入参（与 /api/goals 契约对齐） */
 type GoalInput = { title: string; description?: string; startDate?: string; endDate?: string; horizon?: string };
 
@@ -267,6 +311,10 @@ export default function Home() {
   const [generatingGoalId, setGeneratingGoalId] = useState<string | null>(null);
   /** kind: task = 拆今日任务产物；action = 制定行动路线产物（5 分钟 undo 窗口） */
   const [lastGenerate, setLastGenerate] = useState<{ kind: "task" | "action"; ids: string[]; expireAt: number } | null>(null);
+  // Step3：每周可用时间 + Planner 弹层会话
+  const [availRows, setAvailRows] = useState<AvailabilityRow[]>([]);
+  const [planSession, setPlanSession] = useState<PlanSession | null>(null);
+  const [planBusy, setPlanBusy] = useState(false);
   // 删除账号确认弹层：expectedEmail 来自 /api/auth/me，inputEmail 由用户输入比对
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteExpectedEmail, setDeleteExpectedEmail] = useState("");
@@ -371,17 +419,19 @@ export default function Home() {
     const headers = { Authorization: `Bearer ${authToken}` };
     (async () => {
       try {
-        const [d, g, s, gl] = await Promise.all([
+        const [d, g, s, gl, av] = await Promise.all([
           fetch("/api/dashboard", { headers }).then((r) => r.json()),
           fetch("/api/growth/stats", { headers }).then((r) => r.json()),
           fetch("/api/goals/summary", { headers }).then((r) => r.json()),
           fetch("/api/goals", { headers }).then((r) => r.json()),
+          fetch("/api/availability", { headers }).then((r) => r.json()),
         ]);
         if (cancelled) return;
         if (d?.profile) setDashboardStats(d);
         if (g?.weeklyMinutes) setGrowthStats(g);
         if (s?.focusGoals) setFocusGoals(s.focusGoals);
         if (Array.isArray(gl?.goals)) setGoals(gl.goals);
+        if (Array.isArray(av?.items)) setAvailRows(av.items as AvailabilityRow[]);
       } catch {
         // 聚合失败不阻塞页面：各面板保持默认/空态
       }
@@ -1025,6 +1075,98 @@ export default function Home() {
     }
   }
 
+  /** 保存每周可用时间（整组替换；标签留空=可排空档，非空=固定块） */
+  async function saveAvailabilityRows(next: AvailabilityRow[]) {
+    if (!requireAuth()) return;
+    setAvailRows(next);
+    try {
+      const res = await fetch("/api/availability", {
+        method: "PUT",
+        headers: apiHeaders(),
+        body: JSON.stringify({ items: next }),
+      });
+      if (!res.ok) throw new Error("save availability failed");
+    } catch {
+      notify("可用时间保存失败，请重试");
+    }
+  }
+
+  /** 加载 Planner 预览（每次打开都重新请求 —— 验收 C，不缓存旧计划） */
+  async function loadPlanPreview(goal: PlanGoal) {
+    setPlanSession({ goal, step: "loading", data: null });
+    try {
+      const res = await fetch(`/api/goals/${goal.id}/plan`, { method: "POST", headers: apiHeaders() });
+      if (!res.ok) throw new Error("plan failed");
+      const data = (await res.json()) as PlanPreviewData;
+      setPlanSession(data.blocked ? { goal, step: "blocked", data } : { goal, step: "preview", data });
+    } catch {
+      setPlanSession({ goal, step: "error", data: null, error: "计划生成失败，请稍后重试" });
+    }
+  }
+
+  /** 打开 Planner（验收 D：已有 planned → 先问是否重新规划） */
+  function openPlanner(goal: PlanGoal) {
+    if (!requireAuth()) return;
+    if (hasPlannedAction(goal)) {
+      setPlanSession({ goal, step: "ask-replan", data: null });
+      return;
+    }
+    void loadPlanPreview(goal);
+  }
+
+  /** 关闭弹层即清会话（不残留 accept 状态） */
+  function closePlanner() {
+    setPlanSession(null);
+  }
+
+  /** 接受计划（唯一写库点；成功后关闭 + 刷新 + 用户语 toast） */
+  async function acceptPlanPreview() {
+    const session = planSession;
+    if (!session?.goal || !session.data?.items?.length) return;
+    setPlanBusy(true);
+    const items = session.data.items;
+    try {
+      const res = await fetch(`/api/goals/${session.goal.id}/plan/accept`, {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({
+          items: items.map((it) => ({ actionId: it.actionId, date: it.date, startTime: it.startTime, endTime: it.endTime })),
+        }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { accepted?: number; error?: string };
+      if (!res.ok) throw new Error(payload.error || "accept failed");
+      const covered = new Set(items.map((it) => it.actionId)).size;
+      setPlanSession(null);
+      await refreshGoals();
+      notify(`计划已安排：未来 14 天生成 ${payload.accepted ?? items.length} 个学习时段，涉及 ${covered} 个行动阶段。执行列表之后可在今日时间轴查看。`);
+    } catch {
+      notify("接受计划失败，请重试");
+    } finally {
+      setPlanBusy(false);
+    }
+  }
+
+  /** 撤销安排（reset）：只清 AI 排程，行动路线/手动日程/完成记录不受影响 */
+  async function resetGoalPlanNow(goal: PlanGoal, thenPreview: boolean) {
+    setPlanBusy(true);
+    try {
+      const res = await fetch(`/api/goals/${goal.id}/plan/reset`, { method: "POST", headers: apiHeaders() });
+      if (!res.ok) throw new Error("reset failed");
+      await refreshGoals();
+      if (thenPreview) {
+        setPlanSession(null);
+        await loadPlanPreview(goal);
+      } else {
+        setPlanSession(null);
+        notify("已撤销 AI 安排（行动路线与手动日程不受影响）");
+      }
+    } catch {
+      notify("撤销安排失败，请重试");
+    } finally {
+      setPlanBusy(false);
+    }
+  }
+
   /** AI Agent 路线卡：库中无该目标则先创建真实 goal，再拆出首个任务（防重复由 addTask/409 兜底） */
   async function handleAgentGoal() {
     if (!requireAuth()) return;
@@ -1192,7 +1334,7 @@ export default function Home() {
               pomodoro={<PomodoroWidget mode={pomodoroMode} seconds={pomodoroSeconds} isRunning={isPomodoroRunning} onToggle={togglePomodoro} onReset={resetPomodoro} onModeChange={changePomodoroMode} />}
             />
           ) : activeTab === "计划" ? (
-            <PlanPanel tasks={tasks} goals={goals} focusGoals={focusGoals} onToggleTask={toggleTask} onDecomposeGoal={decomposeGoal} onGenerateRoute={generateRoute} decomposingGoalId={decomposingGoalId} generatingGoalId={generatingGoalId} onToggleAction={toggleActionStatus} onCreateGoal={createGoal} onUpdateGoal={updateGoal} onDeleteGoal={deleteGoal} onAgentGoal={handleAgentGoal} onBackToToday={() => setActiveTab("今日")} />
+            <PlanPanel tasks={tasks} goals={goals} focusGoals={focusGoals} onToggleTask={toggleTask} onDecomposeGoal={decomposeGoal} onGenerateRoute={generateRoute} decomposingGoalId={decomposingGoalId} generatingGoalId={generatingGoalId} onToggleAction={toggleActionStatus} onOpenPlan={openPlanner} onResetPlan={(goal) => resetGoalPlanNow(goal, false)} availRows={availRows} onSaveAvailability={saveAvailabilityRows} onCreateGoal={createGoal} onUpdateGoal={updateGoal} onDeleteGoal={deleteGoal} onAgentGoal={handleAgentGoal} onBackToToday={() => setActiveTab("今日")} />
           ) : activeTab === "记录" ? (
             <RecordsPanel logs={logs} input={input} setInput={setInput} recordMinutes={recordMinutes} setRecordMinutes={setRecordMinutes} recordOutput={recordOutput} setRecordOutput={setRecordOutput} inputRef={quickLogRef} onSubmit={submitLog} onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)} onBackToToday={() => setActiveTab("今日")} />
           ) : (
@@ -1261,6 +1403,18 @@ export default function Home() {
           <span>{lastGenerate.kind === "task" ? `已拆出 ${lastGenerate.ids.length} 个今日任务` : `已生成 ${lastGenerate.ids.length} 个行动阶段`}</span>
           <button onClick={undoDecompose}>撤销 <Undo2 size={13} /></button>
         </div>
+      )}
+
+      {planSession && (
+        <PlannerModal
+          session={planSession}
+          busy={planBusy}
+          onClose={closePlanner}
+          onAccept={() => void acceptPlanPreview()}
+          onReplan={() => resetGoalPlanNow(planSession.goal, true)}
+          onKeepExisting={() => { closePlanner(); notify("已保留当前安排；执行时段将在今日时间轴（下一步）展示。"); }}
+          onGoAvailability={() => { closePlanner(); document.getElementById("availability-card")?.scrollIntoView({ behavior: "smooth", block: "start" }); }}
+        />
       )}
 
       <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} authToken={authToken} onNotify={notify} />
@@ -1407,7 +1561,7 @@ function WorkspaceHeader({ eyebrow, title, description, onBackToToday, action }:
   return <div className="workspace-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><div className="workspace-heading-actions">{action}{onBackToToday ? <button className="quiet-button" onClick={onBackToToday}><LayoutDashboard size={15} /> 回到今日</button> : null}</div></div>;
 }
 
-function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpdateGoal, onDeleteGoal, onAgentGoal, onDecomposeGoal, onGenerateRoute, decomposingGoalId, generatingGoalId, onToggleAction, onBackToToday }: {
+function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpdateGoal, onDeleteGoal, onAgentGoal, onDecomposeGoal, onGenerateRoute, decomposingGoalId, generatingGoalId, onToggleAction, onOpenPlan, onResetPlan, availRows, onSaveAvailability, onBackToToday }: {
   tasks: Task[];
   goals: PlanGoal[];
   focusGoals: Goal[] | null;
@@ -1421,6 +1575,10 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
   decomposingGoalId: string | null;
   generatingGoalId: string | null;
   onToggleAction: (action: ActionRow) => void;
+  onOpenPlan: (goal: PlanGoal) => void;
+  onResetPlan: (goal: PlanGoal) => void;
+  availRows: AvailabilityRow[];
+  onSaveAvailability: (rows: AvailabilityRow[]) => void;
   onBackToToday?: () => void;
 }) {
   const completed = tasks.filter((task) => task.status === "done").length;
@@ -1478,11 +1636,33 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
                       <div className="goal-action-title-line"><strong>{action.title}</strong><span className="goal-action-est">{formatActionMinutes(action.estimatedMinutes)}</span></div>
                       {action.dependsOnTitles.length > 0 && <span className="goal-action-depends">依赖：{action.dependsOnTitles.join("、")}</span>}
                     </div>
-                    <button className="goal-action-toggle" disabled={action.status === "planned"} onClick={() => onToggleAction(action)}>{action.status === "completed" ? "撤销完成" : action.status === "planned" ? "待安排" : "标记完成"}</button>
+                    <button className="goal-action-toggle" disabled={action.status === "planned"} onClick={() => onToggleAction(action)}>{action.status === "completed" ? "撤销完成" : action.status === "planned" ? "已安排" : "标记完成"}</button>
                   </div>
                 ))}
               </div>
             )}
+            {goalActions.length > 0 && (() => {
+              const plannedN = goalActions.filter((a) => a.status === "planned").length;
+              const pendingN = goalActions.filter((a) => a.status === "pending").length;
+              return (
+                <div className="goal-plan-bar">
+                  <span className="goal-plan-bar-note">{plannedN > 0 ? `已安排 ${plannedN} 个阶段` : pendingN > 0 ? "可安排排程" : "全部完成"}</span>
+                  <div className="goal-plan-bar-actions">
+                    {pendingN > 0 && <button className="text-button goal-plan-btn" disabled={busy} onClick={() => onOpenPlan(goal)}>安排计划 <ChevronRight size={13} /></button>}
+                    {plannedN > 0 && (
+                      <button
+                        className="text-button"
+                        onClick={() => {
+                          if (window.confirm("撤销 AI 安排的计划？\n\n已生成的时间安排会被移除，但不会删除行动路线，也不会影响手动添加的日程。\n（点「确定」=撤销安排；「取消」=保留计划）")) onResetPlan(goal);
+                        }}
+                      >
+                        撤销安排
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
             <div className="goal-footer">
               <span>{hasRoute ? <><Target size={13} /> 行动路线 {goal.actionDoneCount ?? 0}/{goal.actionCount ?? 0} 完成</> : <><Target size={13} /> {goal.taskCount ?? 0} 个任务 · {goal.doneCount ?? 0} 完成</>}</span>
               <div className="goal-actions">
@@ -1503,7 +1683,165 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
       <section className="panel schedule-panel"><div className="panel-heading"><div><span className="eyebrow">TODAY TIMELINE</span><h2>今日时间轴</h2></div><span className="count-badge">{completed}/{tasks.length} 已完成</span></div><p className="panel-desc">把任务放进现实的时间里，完成感会更具体。</p><div className="schedule-list">{tasks.map((task) => <div className={`schedule-card ${task.status === "done" ? "is-done" : task.status === "current" ? "is-current" : ""} ${task.acceptance ? "is-expandable" : ""}`} key={task.id} onClick={() => task.acceptance && setExpandedTaskId(expandedTaskId === task.id ? null : task.id)}><div className="schedule-time"><strong>{task.time || "今天"}</strong><span>{task.duration}</span></div><div className={`schedule-icon kind-${task.kind}`}>{renderTaskKindIcon(task.kind, 16)}</div><div className="schedule-copy"><div className="task-title-line"><h3>{task.title}</h3><span className={`schedule-kind kind-${task.kind}`}>{taskKindLabel(task.kind)}</span>{task.status === "current" && <span className="now-pill">NOW</span>}</div><p>{task.subtitle}</p>{expandedTaskId === task.id && task.acceptance ? <p className="task-acceptance"><span>完成标准</span>{task.acceptance}</p> : null}<span className="schedule-reward">+{task.xp} XP · +{task.coin} coin</span></div><button className={`task-check ${task.status === "done" ? "checked" : ""}`} onClick={(event) => { event.stopPropagation(); onToggleTask(task.id); }} aria-label={`${task.status === "done" ? "撤销" : "完成"}：${task.title}`}>{task.status === "done" ? <Check size={15} strokeWidth={3} /> : <span />}</button></div>)}</div></section>
      <aside className="panel weekly-plan-panel"><div className="panel-heading"><div><span className="eyebrow">WEEKLY INTENT</span><h2>本周重点</h2></div><ListChecks size={18} className="panel-icon" /></div><div className="intent-list">{focusGoals && focusGoals.length > 0 ? focusGoals.map((goal, index) => <div className="intent-item" key={goal.id}><span className="intent-number">0{index + 1}</span><div><strong>{goal.title}</strong><p>{goal.description}</p></div></div>) : <div className="intent-item"><span className="intent-number">—</span><div><strong>还没有进行中的目标</strong><p>在计划里创建一个 4-12 周目标，本周重点会从这里出现。</p></div></div>}</div><div className="plan-note"><Sparkles size={15} /><span>建议：今天完成主任务后，不再新增新的计划。</span></div></aside>
     </div>
+
+    <AvailabilityEditor rows={availRows} onSave={onSaveAvailability} />
   </div>;
+}
+
+/** 本周可用时间设置卡（Step3；标签留空 = 可排空档，非空 = 固定块不可占用） */
+function AvailabilityEditor({ rows, onSave }: { rows: AvailabilityRow[]; onSave: (rows: AvailabilityRow[]) => void }) {
+  const [wd, setWd] = useState(0);
+  const [start, setStart] = useState("19:00");
+  const [end, setEnd] = useState("21:00");
+  const [title, setTitle] = useState("");
+  const [touched, setTouched] = useState(false);
+
+  const sortedRows = [...rows].sort((a, b) => (a.weekday === b.weekday ? a.startTime.localeCompare(b.startTime) : a.weekday - b.weekday));
+
+  function addRow(w: number, startTime: string, endTime: string, label: string) {
+    const dup = rows.some((r) => r.weekday === w && r.startTime === startTime && r.endTime === endTime && r.title === label);
+    if (dup) return;
+    onSave([...rows, { weekday: w, startTime, endTime, type: "learn", title: label }]);
+    setTouched(true);
+  }
+  function removeRow(indexInSorted: number) {
+    const target = sortedRows[indexInSorted];
+    onSave(rows.filter((r) => !(r.weekday === target.weekday && r.startTime === target.startTime && r.endTime === target.endTime && r.title === target.title)));
+    setTouched(true);
+  }
+  function addPreset() {
+    // 工作日 19:00-22:00 学习空档（去重后并入）
+    const next = [...rows];
+    for (let w = 0; w <= 4; w++) {
+      if (!next.some((r) => r.weekday === w && r.startTime === "19:00" && r.endTime === "22:00")) {
+        next.push({ weekday: w, startTime: "19:00", endTime: "22:00", type: "learn", title: "" });
+      }
+    }
+    onSave(next);
+    setTouched(true);
+  }
+
+  return (
+    <section id="availability-card" className="panel availability-panel">
+      <div className="panel-heading"><div><span className="eyebrow">WEEKLY TIME</span><h2>本周可用时间</h2></div><span className="availability-hint">标签留空 = 可排空档 · 填标签（如“上课/运动”）= 固定块只展示</span></div>
+      <div className="availability-list">
+        {sortedRows.length === 0 && <div className="availability-empty">还没有可用时间。先告诉 AI 你每周什么时候能投入，Planner 才能排学习时段。</div>}
+        {sortedRows.map((row, i) => (
+          <div className={`availability-row ${row.title ? "is-busy" : ""}`} key={`${row.weekday}-${row.startTime}-${row.title}`}>
+            <span className="availability-weekday">{WEEKDAY_LABELS[row.weekday]}</span>
+            <span className="availability-time">{row.startTime}–{row.endTime}</span>
+            <span className="availability-type">{row.title ? row.title : "可安排"}</span>
+            <button className="availability-remove" aria-label={`删除 ${WEEKDAY_LABELS[row.weekday]} ${row.startTime}-${row.endTime}`} onClick={() => removeRow(i)}>×</button>
+          </div>
+        ))}
+      </div>
+      <div className="availability-add">
+        <select value={wd} onChange={(e) => setWd(Number(e.target.value))} aria-label="周几">{WEEKDAY_LABELS.map((label, i) => <option key={label} value={i}>{label}</option>)}</select>
+        <input type="time" value={start} onChange={(e) => setStart(e.target.value)} aria-label="开始时间" />
+        <input type="time" value={end} onChange={(e) => setEnd(e.target.value)} aria-label="结束时间" />
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="标签（可空 = 可排空档）" aria-label="标签" />
+        <button className="quiet-button availability-add-btn" disabled={!start || !end || end <= start} title={start && end && end <= start ? "结束时间必须晚于开始时间" : "添加"} onClick={() => { if (start && end && end > start) addRow(wd, start, end, title.trim()); }}>添加</button>
+      </div>
+      <div className="availability-tools">
+        <button className="quiet-button" onClick={addPreset}>快捷预设：工作日 19:00-22:00 学习</button>
+        {touched && <button className="text-button" onClick={() => { setTitle(""); setStart("19:00"); setEnd("21:00"); setTouched(false); }}>已自动保存 ✓</button>}
+      </div>
+    </section>
+  );
+}
+
+/** Planner 建议弹层（Step3；关闭即清会话 = 验收 C；accept 才写库） */
+function PlannerModal({ session, busy, onClose, onAccept, onReplan, onKeepExisting, onGoAvailability }: {
+  session: PlanSession;
+  busy: boolean;
+  onClose: () => void;
+  onAccept: () => void;
+  onReplan: () => void;
+  onKeepExisting: () => void;
+  onGoAvailability: () => void;
+}) {
+  const { goal, step, data, error } = session;
+  const verdictLabel: Record<string, string> = { "on-track": "节奏合适", tight: "有压力", risk: "风险提示" };
+  return (
+    <div className="quiz-overlay" role="dialog" aria-modal="true" aria-label="计划建议">
+      <button className="quiz-overlay-backdrop" aria-label="关闭" onClick={onClose} />
+      <div className="quiz-overlay-dialog plan-dialog">
+        <div className="quiz-overlay-toolbar"><span>计划建议 · {goal.title}</span><button className="quiz-close-button" onClick={onClose}><X size={15} /> 关闭</button></div>
+
+        {step === "loading" && <div className="plan-loading">正在生成未来 14 天的排程建议…</div>}
+
+        {step === "ask-replan" && (
+          <div className="plan-replan">
+            <h3>已存在安排计划</h3>
+            <p>「{goal.title}」已有阶段被安排过。重新规划会先撤销现有 AI 排程（行动路线与手动日程不受影响），再按当前可用时间重新生成建议。</p>
+            <div className="plan-dialog-actions">
+              <button className="primary-button" disabled={busy} onClick={onReplan}>{busy ? "处理中…" : "重新规划"} <RotateCcw size={14} /></button>
+              <button className="quiet-button" onClick={onKeepExisting}>查看已有安排（保留）</button>
+            </div>
+          </div>
+        )}
+
+        {step === "blocked" && data && (
+          <div className="plan-blocked">
+            <p>{data.message || "暂时无法排程"}</p>
+            <div className="plan-dialog-actions">
+              {data.blocked === "no-availability" && <button className="primary-button" onClick={onGoAvailability}>去设置可用时间</button>}
+              <button className="quiet-button" onClick={onClose}>知道了</button>
+            </div>
+          </div>
+        )}
+
+        {step === "error" && (
+          <div className="plan-blocked"><p>{error || "出错了，请重试"}</p><div className="plan-dialog-actions"><button className="quiet-button" onClick={onClose}>关闭</button></div></div>
+        )}
+
+        {step === "preview" && data && (
+          <div className="plan-preview">
+            <div className={`plan-feasibility verdict-${data.feasibility?.verdict ?? "risk"}`}>
+              <div className="plan-feasibility-msg">
+                <span className={`plan-verdict-badge v-${data.feasibility?.verdict ?? "risk"}`}>{verdictLabel[data.feasibility?.verdict ?? "risk"]}</span>
+                <p>{data.feasibility?.message}</p>
+              </div>
+              <div className="plan-meta">
+                <span>总投入 {formatActionMinutes(data.feasibility?.totalMinutes ?? 0)}</span>
+                <span>剩余 {data.feasibility?.remainingDays ?? "-"} 天</span>
+                {typeof data.feasibility?.weeksNeeded === "number" && <span>预计约 {data.feasibility.weeksNeeded} 周</span>}
+              </div>
+            </div>
+            <div className="plan-source-note">{data.source === "llm" ? "AI 已给出执行顺序建议" : "按依赖与优先级规则排序"}</div>
+            <div className="plan-day-list">
+              {(() => {
+                const groups = new Map<string, PlanItemDraft[]>();
+                for (const it of data.items) {
+                  const list = groups.get(it.date) ?? [];
+                  list.push(it);
+                  groups.set(it.date, list);
+                }
+                return [...groups.entries()].map(([date, its]) => (
+                  <div className="plan-day-group" key={date}>
+                    <div className="plan-day-head"><strong>{formatPlanDate(date)}</strong><span>{its.length} 个时段</span></div>
+                    {its.map((it, i) => (
+                      <div className="plan-item" key={`${it.actionId}-${i}`}>
+                        <span className="plan-item-time">{it.startTime}–{it.endTime}</span>
+                        <span className="plan-item-title">{it.title}</span>
+                      </div>
+                    ))}
+                  </div>
+                ));
+              })()}
+            </div>
+            {data.remainingMinutes && Object.values(data.remainingMinutes).some((v) => v > 0) && (
+              <div className="plan-remain-note">部分阶段超出 14 天窗口，将按此节奏后续续排。</div>
+            )}
+            <div className="plan-dialog-actions">
+              <button className="primary-button" disabled={busy} onClick={onAccept}>{busy ? "安排中…" : `接受计划（${data.items.length} 个时段）`} <Check size={14} /></button>
+              <button className="quiet-button" onClick={onClose}>再看看</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function evidenceLabel(evidence: "输入" | "输入 + 输出" | "应用") {

@@ -1690,3 +1690,54 @@ h1 { margin-top: 15px; color: var(--ink); font: 600 clamp(29px, 3.2vw, 40px)/1.1
 .goal-action-toggle:hover { color: #cb5e48; }
 .goal-action-toggle:disabled { color: #b6bab3; cursor: default; }
 .goal-route-button { font-weight: 600; }
+
+/* ===== Smart Planner Step 3：安排计划条 / 可用时间 / 计划弹层 ===== */
+.goal-plan-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.goal-plan-bar-note { color: #9ba39d; font: 9px "DM Mono", monospace; }
+.goal-plan-bar-actions { display: inline-flex; align-items: center; gap: 10px; }
+.goal-plan-btn { font-weight: 600; }
+
+.availability-panel { margin-top: 14px; }
+.availability-hint { color: #a2a9a2; font-size: 9px; }
+.availability-list { display: grid; gap: 5px; margin-top: 10px; }
+.availability-row { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.62); }
+.availability-row.is-busy { background: rgba(240,120,92,.06); border-color: #ecd7cf; }
+.availability-weekday { flex: 0 0 44px; color: var(--ink); font-weight: 500; font-size: 11px; }
+.availability-time { color: var(--ink-soft); font: 10px "DM Mono", monospace; }
+.availability-type { margin-left: auto; color: #639176; font-size: 10px; }
+.availability-row.is-busy .availability-type { color: var(--coral); }
+.availability-remove { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; color: #b0b5ae; background: transparent; font-size: 15px; line-height: 1; }
+.availability-remove:hover { color: var(--coral); background: rgba(240,120,92,.08); }
+.availability-empty { color: #a2a9a2; font-size: 11px; padding: 6px 2px; }
+.availability-add { display: flex; gap: 8px; margin-top: 9px; align-items: center; flex-wrap: wrap; }
+.availability-add select, .availability-add input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--white); color: var(--ink); font-size: 11px; }
+.availability-add input[type="time"] { font: 11px "DM Mono", monospace; }
+.availability-add input[type="text"] { flex: 1; min-width: 150px; }
+.availability-tools { display: flex; gap: 10px; margin-top: 8px; align-items: center; }
+
+.plan-dialog { max-width: 520px; width: min(520px, calc(100vw - 32px)); max-height: 82vh; overflow: auto; }
+.plan-loading, .plan-blocked, .plan-replan { padding: 18px 4px 6px; }
+.plan-replan h3 { font: 600 15px/1.4 "Noto Serif SC", serif; color: var(--ink); }
+.plan-replan p, .plan-blocked p { color: var(--ink-soft); font-size: 12px; line-height: 1.7; margin-top: 8px; white-space: pre-wrap; }
+.plan-blocked p { color: #a0715a; }
+.plan-feasibility { padding: 10px 12px; border-radius: 10px; margin: 4px 0 8px; border: 1px solid var(--line); }
+.plan-feasibility.verdict-on-track { background: rgba(99,145,118,.08); border-color: #d5e3d8; }
+.plan-feasibility.verdict-tight { background: rgba(224,169,84,.08); border-color: #ecd9b6; }
+.plan-feasibility.verdict-risk { background: rgba(240,120,92,.07); border-color: #edcfc4; }
+.plan-feasibility-msg { display: flex; gap: 8px; align-items: flex-start; }
+.plan-feasibility-msg p { color: var(--ink-soft); font-size: 12px; line-height: 1.7; }
+.plan-verdict-badge { flex: 0 0 auto; margin-top: 1px; padding: 2px 8px; border-radius: 99px; font-size: 9px; color: #fff; }
+.plan-verdict-badge.v-on-track { background: var(--sage); }
+.plan-verdict-badge.v-tight { background: #d8a14a; }
+.plan-verdict-badge.v-risk { background: var(--coral); }
+.plan-meta { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; color: #9ba39d; font: 9px "DM Mono", monospace; }
+.plan-source-note { color: #a2a9a2; font-size: 9px; margin: 2px 0 8px; }
+.plan-day-list { display: grid; gap: 8px; margin-top: 4px; }
+.plan-day-group { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; background: rgba(255,253,248,.7); }
+.plan-day-head { display: flex; justify-content: space-between; align-items: baseline; color: #9ba39d; font: 10px "DM Mono", monospace; }
+.plan-day-head strong { color: var(--ink-soft); font-weight: 500; }
+.plan-item { display: flex; gap: 10px; align-items: baseline; margin-top: 5px; }
+.plan-item-time { flex: 0 0 88px; color: var(--coral); font: 10px "DM Mono", monospace; }
+.plan-item-title { color: var(--ink); font-size: 12px; }
+.plan-remain-note { margin-top: 9px; color: #a0715a; font-size: 11px; }
+.plan-dialog-actions { display: flex; gap: 10px; margin-top: 13px; flex-wrap: wrap; }
