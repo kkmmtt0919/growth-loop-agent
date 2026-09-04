@@ -99,7 +99,38 @@ function applyWorkspaceData(data: typeof demoSeed) {
 type AuthMode = "loading" | "demo" | "login" | "ready";
 
 /** 计划页真实目标：API 返回的派生 taskCount/doneCount 与业务日期附加在 demo Goal 形状上 */
-type PlanGoal = Goal & { taskCount?: number; doneCount?: number; startDate?: string; endDate?: string };
+type PlanGoal = Goal & { taskCount?: number; doneCount?: number; startDate?: string; endDate?: string; actionCount?: number; actionDoneCount?: number; actions?: ActionRow[] };
+
+/** 行动阶段行（与后端 ActionView 同构；Smart Planner Step 2c） */
+type ActionRow = {
+  id: string;
+  goalId: string;
+  title: string;
+  description: string | null;
+  estimatedMinutes: number;
+  priority: number;
+  status: "pending" | "planned" | "completed";
+  completedAt: string | null;
+  sortOrder: number;
+  createdAt: string;
+  dependsOnTitles: string[];
+};
+
+/** 行动阶段按 id 去重合并（新生成结果并入已有列表） */
+function mergeActionRows(existing: ActionRow[], incoming: ActionRow[]): ActionRow[] {
+  const seen = new Set(existing.map((a) => a.id));
+  return [...existing, ...incoming.filter((a) => !seen.has(a.id))];
+}
+
+/** 分钟数 → 可读时长（阶段总投入展示用） */
+function formatActionMinutes(min: number): string {
+  if (min >= 60) {
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return m > 0 ? `约 ${h}小时${m}分` : `约 ${h}小时`;
+  }
+  return `${min} 分钟`;
+}
 
 /** 目标创建/编辑入参（与 /api/goals 契约对齐） */
 type GoalInput = { title: string; description?: string; startDate?: string; endDate?: string; horizon?: string };
@@ -231,9 +262,11 @@ export default function Home() {
   const [focusGoals, setFocusGoals] = useState<Goal[] | null>(null);
   // 计划页真实目标：初始用 demoSeed 回退（原型模式），ready 后由 GET /api/goals 覆盖
   const [goals, setGoals] = useState<PlanGoal[]>(demoSeed.goals);
-  // Agent 拆解：进行中的目标 id（按钮 loading）+ 最近一次拆解结果（undo 用 state 保存，不依赖 toast）
+  // 拆解/行动路线：进行中的目标 id（按钮 loading）+ 最近一次生成结果（undo 用 state 保存，不依赖 toast）
   const [decomposingGoalId, setDecomposingGoalId] = useState<string | null>(null);
-  const [lastDecompose, setLastDecompose] = useState<{ ids: string[]; expireAt: number } | null>(null);
+  const [generatingGoalId, setGeneratingGoalId] = useState<string | null>(null);
+  /** kind: task = 拆今日任务产物；action = 制定行动路线产物（5 分钟 undo 窗口） */
+  const [lastGenerate, setLastGenerate] = useState<{ kind: "task" | "action"; ids: string[]; expireAt: number } | null>(null);
   // 删除账号确认弹层：expectedEmail 来自 /api/auth/me，inputEmail 由用户输入比对
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteExpectedEmail, setDeleteExpectedEmail] = useState("");
@@ -792,6 +825,9 @@ export default function Home() {
       doneCount: Number(g.doneCount ?? 0),
       startDate: g.start_date ? String(g.start_date) : undefined,
       endDate: g.end_date ? String(g.end_date) : undefined,
+      actionCount: Number(g.actionCount ?? 0),
+      actionDoneCount: Number(g.actionDoneCount ?? 0),
+      actions: Array.isArray(g.actions) ? (g.actions as ActionRow[]) : [],
     };
   }
 
@@ -831,7 +867,7 @@ export default function Home() {
 
   async function deleteGoal(id: string) {
     if (!requireAuth()) return;
-    if (!window.confirm("删除目标后，其下任务会保留为独立行动，确定删除？")) return;
+    if (!window.confirm("删除目标会同时删除它的行动路线（今日任务会保留为独立任务）。确定删除？")) return;
     try {
       const res = await fetch(`/api/goals/${id}`, { method: "DELETE", headers: apiHeaders() });
       if (!res.ok) throw new Error("delete failed");
@@ -875,7 +911,7 @@ export default function Home() {
       .catch(() => {});
   }, [authMode, authToken]);
 
-  /** Agent 拆解：POST decompose → 新任务并入今日列表 + undo 记录（5 分钟窗口） */
+  /** 战术层入口「拆今日任务」：POST decompose → 新任务并入今日列表 + undo 记录（5 分钟窗口） */
   async function decomposeGoal(goalId: string) {
     if (!requireAuth()) return;
     if (decomposingGoalId) return;
@@ -886,10 +922,10 @@ export default function Home() {
       const data = (await res.json()) as { count?: number; createdTaskIds?: string[]; tasks?: Task[] };
       if (data.tasks?.length) {
         setTasks((current) => [...current, ...(data.tasks as Task[])]);
-        setLastDecompose({ ids: data.createdTaskIds ?? [], expireAt: Date.now() + 5 * 60_000 });
-        notify(`已拆出 ${data.tasks.length} 步`);
+        setLastGenerate({ kind: "task", ids: data.createdTaskIds ?? [], expireAt: Date.now() + 5 * 60_000 });
+        notify(`已拆出 ${data.tasks.length} 个今日任务`);
       } else {
-        notify("这次没有新增任务（步骤与已有行动重复）");
+        notify("这次没有新增任务（步骤与已有任务重复）");
       }
       refreshGoals();
     } catch {
@@ -899,20 +935,90 @@ export default function Home() {
     }
   }
 
-  /** 撤销拆解：批量删除刚创建的任务（不冲正账本） */
-  async function undoDecompose() {
-    if (!lastDecompose || !requireAuth()) return;
-    const ids = lastDecompose.ids;
+  /** 战略层入口「制定行动路线」：POST actions/generate → Action 池，不进今日列表（2c） */
+  async function generateRoute(goalId: string) {
+    if (!requireAuth()) return;
+    if (generatingGoalId || decomposingGoalId) return;
+    setGeneratingGoalId(goalId);
     try {
-      const res = await fetch("/api/tasks/batch", {
-        method: "DELETE",
+      const res = await fetch(`/api/goals/${goalId}/actions/generate`, { method: "POST", headers: apiHeaders() });
+      if (!res.ok) throw new Error("generate route failed");
+      const data = (await res.json()) as { count?: number; skipped?: number; actions?: ActionRow[] };
+      const acts = data.actions ?? [];
+      if (acts.length > 0) {
+        setGoals((current) =>
+          current.map((g) =>
+            g.id === goalId ? { ...g, actions: mergeActionRows(g.actions ?? [], acts) } : g,
+          ),
+        );
+        setLastGenerate({ kind: "action", ids: acts.map((a) => a.id), expireAt: Date.now() + 5 * 60_000 });
+        notify(`已生成 ${acts.length} 个行动阶段`);
+      } else {
+        notify("暂未生成行动阶段，可以重新规划");
+      }
+      refreshGoals();
+    } catch {
+      notify("行动路线生成失败，请稍后重试");
+    } finally {
+      setGeneratingGoalId(null);
+    }
+  }
+
+  /** 手动标记行动阶段完成 / 撤销完成（乐观更新；D5：不入 records/账本，只记 completed_at） */
+  async function toggleActionStatus(action: ActionRow) {
+    if (!requireAuth()) return;
+    const next: ActionRow["status"] = action.status === "completed" ? "pending" : "completed";
+    const applyToGoal = (rows: ActionRow[]) => rows.map((a) => (a.id === action.id ? { ...a, status: next } : a));
+    setGoals((current) => current.map((g) => (g.id === action.goalId ? { ...g, actions: applyToGoal(g.actions ?? []) } : g)));
+    try {
+      const res = await fetch(`/api/actions/${action.id}`, {
+        method: "PATCH",
         headers: apiHeaders(),
-        body: JSON.stringify({ ids }),
+        body: JSON.stringify({ status: next }),
       });
-      if (!res.ok) throw new Error("undo failed");
-      setTasks((current) => current.filter((t) => !ids.includes(t.id)));
-      setLastDecompose(null);
-      notify("已撤销拆解");
+      if (!res.ok) throw new Error("patch action failed");
+      const data = (await res.json()) as { action?: ActionRow };
+      if (data.action) {
+        setGoals((current) =>
+          current.map((g) => (g.id === action.goalId ? { ...g, actions: (g.actions ?? []).map((a) => (a.id === action.id ? (data.action as ActionRow) : a)) } : g)),
+        );
+      }
+      refreshGoals();
+    } catch {
+      setGoals((current) =>
+        current.map((g) => (g.id === action.goalId ? { ...g, actions: (g.actions ?? []).map((a) => (a.id === action.id ? action : a)) } : g)),
+      );
+      notify("行动阶段更新失败，请重试");
+    }
+  }
+
+  /** 撤销最近一次生成（task 分支删 tasks；action 分支删行动路线） */
+  async function undoDecompose() {
+    if (!lastGenerate || !requireAuth()) return;
+    const { kind, ids } = lastGenerate;
+    try {
+      if (kind === "task") {
+        const res = await fetch("/api/tasks/batch", {
+          method: "DELETE",
+          headers: apiHeaders(),
+          body: JSON.stringify({ ids }),
+        });
+        if (!res.ok) throw new Error("undo tasks failed");
+        setTasks((current) => current.filter((t) => !ids.includes(t.id)));
+        notify("已撤销拆解");
+      } else {
+        const res = await fetch("/api/actions", {
+          method: "DELETE",
+          headers: apiHeaders(),
+          body: JSON.stringify({ actionIds: ids }),
+        });
+        if (!res.ok) throw new Error("undo actions failed");
+        setGoals((current) =>
+          current.map((g) => ({ ...g, actions: (g.actions ?? []).filter((a) => !ids.includes(a.id)) })),
+        );
+        notify("已撤销行动路线");
+      }
+      setLastGenerate(null);
       refreshGoals();
     } catch {
       notify("撤销失败，请重试");
@@ -1086,7 +1192,7 @@ export default function Home() {
               pomodoro={<PomodoroWidget mode={pomodoroMode} seconds={pomodoroSeconds} isRunning={isPomodoroRunning} onToggle={togglePomodoro} onReset={resetPomodoro} onModeChange={changePomodoroMode} />}
             />
           ) : activeTab === "计划" ? (
-            <PlanPanel tasks={tasks} goals={goals} focusGoals={focusGoals} onToggleTask={toggleTask} onDecomposeGoal={decomposeGoal} decomposingGoalId={decomposingGoalId} onCreateGoal={createGoal} onUpdateGoal={updateGoal} onDeleteGoal={deleteGoal} onAgentGoal={handleAgentGoal} onBackToToday={() => setActiveTab("今日")} />
+            <PlanPanel tasks={tasks} goals={goals} focusGoals={focusGoals} onToggleTask={toggleTask} onDecomposeGoal={decomposeGoal} onGenerateRoute={generateRoute} decomposingGoalId={decomposingGoalId} generatingGoalId={generatingGoalId} onToggleAction={toggleActionStatus} onCreateGoal={createGoal} onUpdateGoal={updateGoal} onDeleteGoal={deleteGoal} onAgentGoal={handleAgentGoal} onBackToToday={() => setActiveTab("今日")} />
           ) : activeTab === "记录" ? (
             <RecordsPanel logs={logs} input={input} setInput={setInput} recordMinutes={recordMinutes} setRecordMinutes={setRecordMinutes} recordOutput={recordOutput} setRecordOutput={setRecordOutput} inputRef={quickLogRef} onSubmit={submitLog} onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)} onBackToToday={() => setActiveTab("今日")} />
           ) : (
@@ -1150,9 +1256,9 @@ export default function Home() {
       </div>}
 
       {toast && <div className="toast" role="status" aria-live="polite"><span className="toast-status" /> {toast}</div>}
-      {lastDecompose && Date.now() < lastDecompose.expireAt && (
+      {lastGenerate && Date.now() < lastGenerate.expireAt && (
         <div className="undo-bar" role="status" aria-live="polite">
-          <span>已拆出 {lastDecompose.ids.length} 步行动</span>
+          <span>{lastGenerate.kind === "task" ? `已拆出 ${lastGenerate.ids.length} 个今日任务` : `已生成 ${lastGenerate.ids.length} 个行动阶段`}</span>
           <button onClick={undoDecompose}>撤销 <Undo2 size={13} /></button>
         </div>
       )}
@@ -1301,7 +1407,7 @@ function WorkspaceHeader({ eyebrow, title, description, onBackToToday, action }:
   return <div className="workspace-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><div className="workspace-heading-actions">{action}{onBackToToday ? <button className="quiet-button" onClick={onBackToToday}><LayoutDashboard size={15} /> 回到今日</button> : null}</div></div>;
 }
 
-function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpdateGoal, onDeleteGoal, onAgentGoal, onDecomposeGoal, decomposingGoalId, onBackToToday }: {
+function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpdateGoal, onDeleteGoal, onAgentGoal, onDecomposeGoal, onGenerateRoute, decomposingGoalId, generatingGoalId, onToggleAction, onBackToToday }: {
   tasks: Task[];
   goals: PlanGoal[];
   focusGoals: Goal[] | null;
@@ -1311,7 +1417,10 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
   onDeleteGoal: (id: string) => void;
   onAgentGoal: () => void;
   onDecomposeGoal: (goalId: string) => void;
+  onGenerateRoute: (goalId: string) => void;
   decomposingGoalId: string | null;
+  generatingGoalId: string | null;
+  onToggleAction: (action: ActionRow) => void;
   onBackToToday?: () => void;
 }) {
   const completed = tasks.filter((task) => task.status === "done").length;
@@ -1347,9 +1456,45 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
 
   return <div className="workspace-page">
     <WorkspaceHeader eyebrow="PLAN BOARD" title="计划地图" description="先看目标，再看今天要落地的那一步。" onBackToToday={onBackToToday} action={<button className="quiet-button" onClick={startCreate}><Plus size={14} /> 新建目标</button>} />
-    <div className="goal-grid-head"><span>你的真实目标 · 进度按任务完成率派生</span></div>
+    <div className="goal-grid-head"><span>你的真实目标 · 进度按行动阶段完成率派生（旧任务自动兼容）</span></div>
     <div className="goal-grid">
-      {goals.map((goal) => <article className="goal-card" key={goal.id}><div className="goal-card-top"><span className="goal-status">{goal.status}</span><span className="goal-horizon">{goal.horizon || "未设周期"}</span></div><h3>{goal.title}</h3><p>{goal.description || "还没有描述"}</p><div className="goal-progress-row"><span>当前进度</span><strong>{goal.progress}%</strong></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="goal-footer"><span><Target size={13} /> {goal.taskCount ?? 0} 个任务 · {goal.doneCount ?? 0} 完成</span><div className="goal-actions"><button className="text-button" onClick={() => startEdit(goal)}>编辑</button><button className="text-button" onClick={() => onDeleteGoal(goal.id)}>删除</button><button className="text-button" disabled={decomposingGoalId !== null} onClick={() => onDecomposeGoal(goal.id)}>{decomposingGoalId === goal.id ? "拆解中…" : "拆成行动"} <ChevronRight size={14} /></button></div></div></article>)}
+      {goals.map((goal) => {
+        const goalActions = goal.actions ?? [];
+        const hasRoute = goalActions.length > 0;
+        const busy = decomposingGoalId !== null || generatingGoalId !== null;
+        return (
+          <article className="goal-card" key={goal.id}>
+            <div className="goal-card-top"><span className="goal-status">{goal.status}</span><span className="goal-horizon">{goal.horizon || "未设周期"}</span></div>
+            <h3>{goal.title}</h3>
+            <p>{goal.description || "还没有描述"}</p>
+            <div className="goal-progress-row"><span>{hasRoute ? "行动阶段" : "当前进度"}</span><strong>{hasRoute ? `${goal.actionDoneCount ?? 0}/${goal.actionCount ?? 0} 已完成` : `${goal.progress}%`}</strong></div>
+            <div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div>
+            {hasRoute && (
+              <div className="goal-actions-list">
+                {goalActions.map((action) => (
+                  <div className={`goal-action-row ${action.status === "completed" ? "is-done" : ""}`} key={action.id}>
+                    <span className={`goal-action-status status-${action.status}`}>{action.status === "completed" ? <Check size={13} strokeWidth={3} /> : action.status === "planned" ? <span className="goal-action-clock" /> : <span className="goal-action-dot" />}</span>
+                    <div className="goal-action-copy">
+                      <div className="goal-action-title-line"><strong>{action.title}</strong><span className="goal-action-est">{formatActionMinutes(action.estimatedMinutes)}</span></div>
+                      {action.dependsOnTitles.length > 0 && <span className="goal-action-depends">依赖：{action.dependsOnTitles.join("、")}</span>}
+                    </div>
+                    <button className="goal-action-toggle" disabled={action.status === "planned"} onClick={() => onToggleAction(action)}>{action.status === "completed" ? "撤销完成" : action.status === "planned" ? "待安排" : "标记完成"}</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="goal-footer">
+              <span>{hasRoute ? <><Target size={13} /> 行动路线 {goal.actionDoneCount ?? 0}/{goal.actionCount ?? 0} 完成</> : <><Target size={13} /> {goal.taskCount ?? 0} 个任务 · {goal.doneCount ?? 0} 完成</>}</span>
+              <div className="goal-actions">
+                <button className="text-button" onClick={() => startEdit(goal)}>编辑</button>
+                <button className="text-button" onClick={() => onDeleteGoal(goal.id)}>删除</button>
+                <button className="text-button" disabled={busy} onClick={() => onDecomposeGoal(goal.id)}>{decomposingGoalId === goal.id ? "拆解中…" : "拆今日任务"}</button>
+                <button className="text-button goal-route-button" disabled={busy} onClick={() => onGenerateRoute(goal.id)}>{generatingGoalId === goal.id ? "生成中…" : "制定行动路线"} <ChevronRight size={14} /></button>
+              </div>
+            </div>
+          </article>
+        );
+      })}
       {goals.length === 0 && <article className="goal-card goal-card-empty"><h3>还没有目标</h3><p>创建一个 4–12 周目标，计划地图会从这里长出真实的下一步。</p><button className="primary-button" onClick={startCreate}>创建第一个目标 <ArrowUpRight size={15} /></button></article>}
     </div>
     {showForm && <section className="panel goal-form-panel"><div className="panel-heading"><div><span className="eyebrow">{editingId ? "EDIT GOAL" : "NEW GOAL"}</span><h2>{editingId ? "编辑目标" : "新建目标"}</h2></div><button className="quiet-button" onClick={() => { setShowForm(false); setEditingId(null); }}>收起</button></div><div className="goal-form"><input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="目标标题，例如：半年英语提升" aria-label="目标标题" /><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="描述（可选）：想达到什么结果" aria-label="目标描述" /><div className="goal-form-row"><input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} aria-label="开始日期" /><input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} aria-label="结束日期" /><input value={form.horizon} onChange={(e) => setForm({ ...form, horizon: e.target.value })} placeholder="周期，如 4 周目标" aria-label="周期" /></div><button className="primary-button" onClick={submitForm} disabled={!form.title.trim()}>{editingId ? "保存修改" : "创建目标"} <ArrowUpRight size={15} /></button></div></section>}
