@@ -54,3 +54,24 @@ export function weekStartOf(dateStr: string): string {
 export function weekEndOf(periodStart: string): string {
   return dateMinusDays(periodStart, -6);
 }
+
+/**
+ * 估算目标剩余天数（Smart Planner 用）：
+ * 优先 end_date 与今天之差（≥1）；无 end_date 按 horizon 文本启发式
+ * （"N 周" → N*7，"N 个月" → N*30）；都没有默认 30 天。
+ * 与旧 decompose 的 computeStepRange 天数计算同口径（decompose.ts:18，旧链路不动，
+ * 此函数供新 ActionPlan 链路复用，避免复制逻辑分叉）。
+ */
+export function estimateRemainingDays(endDate: string | null, horizon: string | null): number {
+  if (endDate) {
+    const end = new Date(`${endDate}T00:00:00Z`).getTime();
+    const today = new Date(`${todayInShanghai()}T00:00:00Z`).getTime();
+    return Math.max(1, Math.round((end - today) / 86_400_000));
+  }
+  const text = horizon ?? "";
+  const weekMatch = text.match(/(\d+)\s*周/);
+  if (weekMatch) return Number(weekMatch[1]) * 7;
+  const monthMatch = text.match(/(\d+)\s*个月/);
+  if (monthMatch) return Number(monthMatch[1]) * 30;
+  return 30;
+}

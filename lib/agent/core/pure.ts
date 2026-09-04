@@ -499,3 +499,82 @@ export function extractWeeklyText(raw: unknown): Pick<WeeklyContent, "summary" |
 export function hasMeaningfulContext(c: { hasGoal: boolean; hasTasks: boolean; hasRecords: boolean }): boolean {
   return c.hasGoal || c.hasTasks || c.hasRecords;
 }
+
+// ============================================================================
+// 6. ActionPlan（Smart Planner Step 2：目标 → 阶段级行动池）
+// ============================================================================
+// 语义（docs/DESIGN_SMART_PLANNER_STEP2.md §3，2026-09-04 用户定稿）：
+//   - Action = 目标路线中的阶段节点（战略层），NOT 今日任务（战术层走旧 Decompose）
+//   - estimatedMinutes = **完成整个 Action 阶段预计总投入**，30-3000；
+//     30min 以下应进 Task，>3000min（50h）说明阶段过粗需再拆（LLM feedback 重试）
+//   - dependsOnTitles 显式依赖（多对多）；无 order/category/acceptance
+//   - 数量 3-6：由 actionStageRange 按剩余天数分档，不让模型自由发挥
+
+/** Action 阶段行（LLM 原始产物 / 校验对象 / 前端展示同构） */
+export type ActionStep = {
+  title: string;
+  description: string | null;
+  estimatedMinutes: number;
+  /** 1 最高 → 10 最低 */
+  priority: number;
+  /** 前置阶段标题（必须与同批其它 step 的 title 精确一致，否则解析时丢弃） */
+  dependsOnTitles: string[];
+};
+
+/** Action 阶段数量分档（D2 定稿）：短 <2 周 → 3；中 2 周-3 个月 → 4；长期 >3 个月 → 5-6 */
+export function actionStageRange(remainingDays: number): { min: number; max: number } {
+  if (remainingDays < 14) return { min: 3, max: 3 };
+  if (remainingDays <= 90) return { min: 4, max: 4 };
+  return { min: 5, max: 6 };
+}
+
+export type ActionValidateIssue = { index: number; reason: string };
+
+/** 单步校验：返回 issue 原因（null = 合格）。不抛异常，宽容优先。 */
+function validateActionStep(step: ActionStep, goalTitle: string, existingTitles: string[]): string | null {
+  const title = step.title?.trim() ?? "";
+  if (!title) return "title 为空";
+  if (title.length > 60) return `title 超长（${title.length} > 60）`;
+  // 整目标当阶段（如把「完成毕业论文」整个当作阶段）→ 硬拒（feedback 要求细分）
+  const normTitle = normalizeTitle(title);
+  const normGoal = normalizeTitle(goalTitle);
+  if (normGoal && normTitle && (normTitle === normGoal || normTitle.includes(normGoal) || normGoal.includes(normTitle))) {
+    return "阶段与整目标重复，需细分为目标内的具体阶段";
+  }
+  if (!Number.isInteger(step.estimatedMinutes) || step.estimatedMinutes < 30 || step.estimatedMinutes > 3000) {
+    return `estimatedMinutes 应在 30-3000（当前 ${step.estimatedMinutes}）——代表完成整个阶段的总投入，不是单次执行时长`;
+  }
+  if (!Number.isInteger(step.priority) || step.priority < 1 || step.priority > 10) {
+    return `priority 应在 1-10（当前 ${step.priority}）`;
+  }
+  if (isTitleDuplicate(title, existingTitles)) return "与已有行动阶段标题重复";
+  return null;
+}
+
+/** 整批校验：过滤不合格步 + 返回全部 issue（供 LLM feedback 重试）。合法步数量由调用方按 range 判定 */
+export function validateActionSteps(
+  steps: ActionStep[],
+  goalTitle: string,
+  existingTitles: string[],
+): { validSteps: ActionStep[]; issues: ActionValidateIssue[] } {
+  const validSteps: ActionStep[] = [];
+  const issues: ActionValidateIssue[] = [];
+  steps.forEach((step, index) => {
+    const reason = validateActionStep(step, goalTitle, existingTitles);
+    if (reason) {
+      issues.push({ index, reason });
+      return;
+    }
+    const cleaned: ActionStep = {
+      title: step.title.trim(),
+      description: typeof step.description === "string" && step.description.trim() ? step.description.trim() : null,
+      estimatedMinutes: step.estimatedMinutes,
+      priority: step.priority,
+      dependsOnTitles: Array.isArray(step.dependsOnTitles)
+        ? step.dependsOnTitles.map((d) => d.trim()).filter((d) => d && d !== step.title)
+        : [],
+    };
+    validSteps.push(cleaned);
+  });
+  return { validSteps, issues };
+}
