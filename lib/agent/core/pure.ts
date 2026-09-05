@@ -419,6 +419,13 @@ export type WeeklyStats = {
     doneTasks: number;
     completionRate: number;
   };
+  // ---- Step 5c 平行扩展（只增不改；历史 content 兼容读取用 optional，WEEKLY_SCHEMA_VERSION 不 bump）----
+  /** 本周 action 排程计划分钟（schedules source='action' date∈[start,end] sum 时长；分母固定 schedule 时长非 action 估算） */
+  planMinutes: number;
+  /** 本周执行实际分钟（execution_records.actual_minutes，completed_at 上海日期∈窗口） */
+  actualMinutes: number;
+  /** 执行率 = round(actual/plan*100)；plan=0 → null（「本周无排程」，绝不显示 0%） */
+  executionRate: number | null;
 };
 
 export type WeeklyContent = {

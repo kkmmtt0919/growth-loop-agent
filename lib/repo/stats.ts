@@ -44,6 +44,38 @@ export async function dailyMinutesSince(
   return rows.map((r) => ({ day: r.day, minutes: Number(r.minutes) }));
 }
 
+/**
+ * 双轨每日投入分钟（V2，DESIGN_SMART_PLANNER_STEP5C §2）：records.minutes ∪ execution.actual_minutes。
+ * - **新增函数不替换 V1**：V1 保留给 weekly.minutes / growth 仪表盘 / records recent（旧口径不跳动）。
+ * - 消费方：planner feasibility（校准）+ AgentContext.minutes7d（晚报实际投入）。
+ * - 时区正确性约束（非优化项）：occurred_at / completed_at 必须显式 `at time zone 'Asia/Shanghai'`，
+ *   否则 UTC 23:30（=上海次日 07:30）会记入错误日期。
+ * - **不去重（补充 B）**：union all 简单加总；records（主动反思）与 execution（执行事实）重叠按设计允许。
+ * 无 execution 数据时 V2 === V1（回归护栏）。
+ */
+export async function dailySpentMinutesSince(
+  userId: string,
+  sinceShanghaiDate: string,
+): Promise<Array<{ day: string; minutes: number }>> {
+  const { rows } = await getPool().query<{ day: string; minutes: string }>(
+    `select day, sum(minutes)::text as minutes
+     from (
+       select (occurred_at at time zone 'Asia/Shanghai')::date::text as day, minutes
+       from public.records
+       where user_id = $1 and minutes > 0
+       union all
+       select (completed_at at time zone 'Asia/Shanghai')::date::text as day, actual_minutes
+       from public.execution_records
+       where user_id = $1
+     ) t
+     where day >= $2
+     group by day
+     order by day asc`,
+    [userId, sinceShanghaiDate],
+  );
+  return rows.map((r) => ({ day: r.day, minutes: Number(r.minutes) }));
+}
+
 /** 输入证据：有分类（kind）的记录数 */
 export async function countInputEvidence(userId: string): Promise<number> {
   const { rows } = await getPool().query<{ count: string }>(

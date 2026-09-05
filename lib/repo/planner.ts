@@ -784,3 +784,22 @@ export async function revertScheduleTx(
     client.release();
   }
 }
+
+/**
+ * 区间内 action 排程计划分钟合计（weekly planMinutes：计划=排了就算，含 planned/completed）。
+ * 口径（STEP5C §3/§6.1-A）：planMinutes = sum(schedule end-start 时长)，**绝不用 action.estimatedMinutes**。
+ */
+export async function sumScheduleMinutesBetween(
+  userId: string,
+  fromDate: string,
+  toDate: string,
+): Promise<number> {
+  const { rows } = await getPool().query<{ minutes: string }>(
+    `select coalesce(sum(extract(epoch from (end_time - start_time)) / 60), 0)::text as minutes
+     from public.schedules
+     where user_id = $1 and source = 'action'
+       and date between $2::date and $3::date`,
+    [userId, fromDate, toDate],
+  );
+  return Number(rows[0]?.minutes ?? 0);
+}

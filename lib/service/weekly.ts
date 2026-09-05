@@ -17,6 +17,8 @@ import {
 } from "@/lib/repo/stats";
 import { getWeeklyReportByPeriod, listWeeklyReports, upsertWeeklyReport, countWeeklyReports } from "@/lib/repo/weekly";
 import { countTasksByGoal, getGoal, listGoals } from "@/lib/repo/goals";
+import { sumScheduleMinutesBetween } from "@/lib/repo/planner";
+import { sumExecutionMinutesBetween } from "@/lib/repo/execution";
 import type { DbGoal } from "@/lib/repo/types";
 import { GOAL_STATUS } from "./goals";
 import { computeStreak } from "./stats";
@@ -64,6 +66,8 @@ async function computeWeeklyStats(
     windowDone,
     prevWindowDone,
     goalIds,
+    planMinutes,
+    actualMinutes,
   ] = await Promise.all([
     countRecordDaysBetween(userId, periodStart, periodEnd),
     countRecordDaysBetween(userId, prevStart, prevEnd),
@@ -76,6 +80,9 @@ async function computeWeeklyStats(
     countWindowScopedDoneTasks(userId, periodStart),
     countWindowScopedDoneTasks(userId, prevStart),
     listGoals(userId),
+    // Step 5c：排程执行维度（平行扩展；计划=排了就算，分母固定 schedule 时长）
+    sumScheduleMinutesBetween(userId, periodStart, periodEnd),
+    sumExecutionMinutesBetween(userId, periodStart, periodEnd),
   ]);
 
   const recordCount = activeDays; // activeDays = 区间内有记录的去重天数
@@ -84,6 +91,8 @@ async function computeWeeklyStats(
   const prevMinutes = prevMinutesRows.reduce((sum, r) => sum + r.minutes, 0);
   const completionRate = windowTotal === 0 ? 0 : Math.round((windowDone / windowTotal) * 100);
   const prevCompletionRate = prevWindowTotal === 0 ? 0 : Math.round((prevWindowDone / prevWindowTotal) * 100);
+  // Step 5c：执行率 = round(actual/plan*100)；plan=0 → null（本周无排程，绝不显示 0%）
+  const executionRate = planMinutes === 0 ? null : Math.round((actualMinutes / planMinutes) * 100);
 
   const activeGoalIds = goalIds.filter((g) => g.status === GOAL_STATUS.ACTIVE);
   const doneByGoal = await countDoneTasksByGoalSince(userId, periodStart);
@@ -119,7 +128,16 @@ async function computeWeeklyStats(
       doneTasks: prevDoneTasks,
       completionRate: prevCompletionRate,
     },
+    planMinutes,
+    actualMinutes,
+    executionRate,
   };
+}
+
+/** 排程执行描述（T44：executionRate 非 null 显示安排/实际/执行率；null = 本周暂无排程，不显示 0%） */
+function scheduleExecText(stats: WeeklyStats): string {
+  if (stats.executionRate === null) return " 本周暂无 AI 排程。";
+  return ` 本周安排 ${stats.planMinutes} 分钟，实际投入 ${stats.actualMinutes} 分钟，执行率 ${stats.executionRate}%。`;
 }
 
 /** 规则回退内容（基于真实 stats 构造，LLM 不可用时用户仍获得结构化完整周报） */
@@ -133,8 +151,8 @@ export function ruleFallback(
   return {
     summary:
       stats.recordCount === 0
-        ? "本周还没有留下任何记录。"
-        : `本周记录 ${stats.recordCount} 条，投入 ${stats.minutes} 分钟，完成 ${stats.doneTasks}/${stats.windowTotal} 个计划任务（计划执行率 ${stats.completionRate}%），连续记录 ${stats.streak} 天。`,
+        ? `本周还没有留下任何记录。${scheduleExecText(stats)}`
+        : `本周记录 ${stats.recordCount} 条，投入 ${stats.minutes} 分钟，完成 ${stats.doneTasks}/${stats.windowTotal} 个计划任务（计划执行率 ${stats.completionRate}%），连续记录 ${stats.streak} 天。${scheduleExecText(stats)}`,
     achievement: [],
     problem,
     suggestion: ["从计划执行率最低的目标里挑一件 10 分钟能完成的小事先做"],
@@ -257,10 +275,15 @@ export async function listWeeklyReportsForUser(
 /** 周统计文本（供 LLM prompt 参考，明确标注由系统核实） */
 function statsToText(stats: WeeklyStats): string {
   const vs = stats.vsPrevWeek;
+  const execLine =
+    stats.executionRate === null
+      ? "排程执行：本周暂无 AI 排程"
+      : `排程执行：本周安排 ${stats.planMinutes} 分钟，实际投入 ${stats.actualMinutes} 分钟，执行率 ${stats.executionRate}%`;
   return [
     `周期：${stats.periodStart} ~ ${stats.periodEnd}`,
     `活跃天数：${stats.activeDays} 天，记录数：${stats.recordCount} 条，投入：${stats.minutes} 分钟`,
     `完成计划任务：${stats.doneTasks}/${stats.windowTotal}，计划执行率：${stats.completionRate}%`,
+    execLine,
     `连续记录：${stats.streak} 天`,
     `目标推进：${stats.goalProgress.map((g) => `${g.title}（${g.progress}%，本周完成 ${g.doneThisWeek}）`).join("；") || "暂无进行中目标"}`,
     `环比上周：记录 ${vs.recordCount} 条 / 投入 ${vs.minutes} 分钟 / 完成 ${vs.doneTasks} / 执行率 ${vs.completionRate}%`,

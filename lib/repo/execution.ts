@@ -91,3 +91,18 @@ export async function updateExecutionActual(
   );
   return rows[0] ?? null;
 }
+
+/** 区间内实际执行分钟合计（上海日期口径；weekly actualMinutes / planner 校准用） */
+export async function sumExecutionMinutesBetween(
+  userId: string,
+  fromDate: string,
+  toDate: string,
+): Promise<number> {
+  const { rows } = await getPool().query<{ minutes: string }>(
+    `select coalesce(sum(actual_minutes), 0)::text as minutes
+     from public.execution_records
+     where user_id = $1 and (completed_at at time zone 'Asia/Shanghai')::date between $2::date and $3::date`,
+    [userId, fromDate, toDate],
+  );
+  return Number(rows[0]?.minutes ?? 0);
+}

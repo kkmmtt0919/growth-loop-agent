@@ -22,6 +22,7 @@ async function main(): Promise<void> {
   const { default: pg } = await import("pg");
   const pool: Pool = new pg.Pool({ connectionString: url });
   const createdGoals: string[] = [];
+  const manualIds: string[] = [];
   try {
     const r = await pool.query(
       "select u.id as uid from profiles u join goals g on g.user_id = u.id order by u.created_at limit 1",
@@ -49,6 +50,7 @@ async function main(): Promise<void> {
       { source: "manual", date: today, startTime: "18:00", endTime: "18:30", title: `${P}手动跑` },
     ]);
     const [s1, s2, sManual] = scheds;
+    manualIds.push(sManual.id);
 
     // 完成 s1(90) + manual + s2(120)
     await planRepo.completeScheduleTx(userId, s1.id);
@@ -94,6 +96,9 @@ async function main(): Promise<void> {
   } finally {
     for (const gid of createdGoals) {
       await pool.query(`delete from public.goals where id = $1`, [gid]).catch(() => {});
+    }
+    for (const mid of manualIds) {
+      await pool.query(`delete from public.schedules where id = $1`, [mid]).catch(() => {});
     }
     await pool.end();
   }

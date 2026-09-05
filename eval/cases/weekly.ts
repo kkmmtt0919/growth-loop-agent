@@ -30,6 +30,10 @@ function makeStats(over: Partial<WeeklyStats> = {}): WeeklyStats {
     streak: 3,
     goalProgress: [],
     vsPrevWeek: { recordCount: 0, minutes: 0, doneTasks: 0, completionRate: 0 },
+    // Step 5c 平行字段（fixture 默认无排程）
+    planMinutes: 0,
+    actualMinutes: 0,
+    executionRate: null,
     ...over,
   };
 }
