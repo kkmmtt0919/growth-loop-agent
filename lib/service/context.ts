@@ -1,6 +1,8 @@
 import { getLatestReport, listRecordsByDate } from "@/lib/repo/evening";
-import { countDoneTasksOnDay, countDoneTasksSince, countTasks, dailyMinutesSince, listRecordDates } from "@/lib/repo/stats";
+import { countDoneTasksOnDay, countDoneTasksSince, countTasks, dailySpentMinutesSince, listRecordDates } from "@/lib/repo/stats";
 import { listTasksByFilter } from "@/lib/repo/tasks";
+import { listSchedulesByDate } from "@/lib/repo/planner";
+import { listExecutionsBySchedules } from "@/lib/repo/execution";
 import { listGoalsForUser } from "./goals";
 import { computeStreak } from "./stats";
 import { dateMinusDays, todayInShanghai } from "./time";
@@ -29,6 +31,12 @@ export type AgentContext = {
   };
   /** 最近一条晚报 summary（getLatestReport，按 report_date 倒序取 1 条），供 Agent 参考连续性 */
   recentReport: string | null;
+  /**
+   * 今日执行（Step 5c：今日已完成的 action 排程 join execution_records）。
+   * manual 排程（action_id=null）**不进入**——本字段描述「安排→实际」的 Action 执行投入；
+   * 无任何完成 → []。execution 是唯一事实来源。
+   */
+  todayExecutions: Array<{ title: string; plannedMinutes: number; actualMinutes: number }>;
 };
 
 export async function buildAgentContext(userId: string): Promise<AgentContext> {
@@ -44,12 +52,38 @@ export async function buildAgentContext(userId: string): Promise<AgentContext> {
       countDoneTasksOnDay(userId, today),
       countTasks(userId),
       listRecordDates(userId),
-      dailyMinutesSince(userId, since7d),
+      dailySpentMinutesSince(userId, since7d),
       getLatestReport(userId),
     ]);
 
   const goal = goalViews.length > 0 ? goalViews[goalViews.length - 1] : null;
   const minutes7d = minutesRows.reduce((sum, r) => sum + r.minutes, 0);
+
+  // todayExecutions：今日完成的 action 排程 join execution（manual 不进；无执行空数组）
+  const doneActionScheds = (await listSchedulesByDate(userId, today)).filter(
+    (s) => s.status === "completed" && s.source === "action",
+  );
+  let todayExecutions: AgentContext["todayExecutions"] = [];
+  if (doneActionScheds.length > 0) {
+    const execs = await listExecutionsBySchedules(
+      userId,
+      doneActionScheds.map((s) => s.id),
+    );
+    const execBySchedule = new Map(execs.map((e) => [e.schedule_id, e]));
+    todayExecutions = doneActionScheds.flatMap((s) => {
+      const exec = execBySchedule.get(s.id);
+      if (!exec) return [];
+      const [hs, ms] = s.start_time.split(":").map(Number);
+      const [he, me] = s.end_time.split(":").map(Number);
+      return [
+        {
+          title: s.title,
+          plannedMinutes: (he * 60 + (me || 0)) - (hs * 60 + (ms || 0)),
+          actualMinutes: exec.actual_minutes,
+        },
+      ];
+    });
+  }
 
   return {
     goal: goal
@@ -71,6 +105,7 @@ export async function buildAgentContext(userId: string): Promise<AgentContext> {
       todayTotal: totalTasks,
     },
     recentReport: latest?.summary ?? null,
+    todayExecutions,
   };
 }
 
@@ -101,6 +136,14 @@ export function contextToText(ctx: AgentContext): string {
     }
   } else {
     lines.push("今日还没有留下任何记录。");
+  }
+
+  // Step 5c：今日执行（安排→实际）。无执行不输出该段（不产生空段/不改变旧段顺序）。
+  if (ctx.todayExecutions.length > 0) {
+    lines.push(`今日执行（${ctx.todayExecutions.length} 条）：`);
+    for (const e of ctx.todayExecutions) {
+      lines.push(`- ${e.title}：计划 ${e.plannedMinutes} 分钟，实际 ${e.actualMinutes} 分钟`);
+    }
   }
 
   const w = ctx.weeklyStats;

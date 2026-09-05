@@ -7,7 +7,7 @@ import {
   type CreateScheduleInput,
   type DbAction,
 } from "@/lib/repo/planner";
-import { dailyMinutesSince } from "@/lib/repo/stats";
+import { dailySpentMinutesSince } from "@/lib/repo/stats";
 import { tryGeneratePlanOrdering } from "@/lib/agent/planner-generator";
 import { ServiceError } from "./errors";
 import { todayInShanghai, dateMinusDays, estimateRemainingDays } from "./time";
@@ -105,9 +105,11 @@ function topoOrder(
   return result;
 }
 
-/** 近 N 天平均每天投入（含 0 天；无记录窗口返回 0） */
+/** 近 N 天平均每天投入（含 0 天；无记录窗口返回 0）。
+ *  Step 5c：切 V2 = records + execution_records 双轨（Planner 校准按真实可投入能力）；
+ *  V1(dailyMinutesSince) 保留给 weekly.minutes/growth/records recent。 */
 async function velocityPerDay(userId: string, days: number): Promise<number> {
-  const rows = await dailyMinutesSince(userId, dateMinusDays(todayInShanghai(), days - 1));
+  const rows = await dailySpentMinutesSince(userId, dateMinusDays(todayInShanghai(), days - 1));
   const sum = rows.reduce((acc, r) => acc + r.minutes, 0);
   return Math.round(sum / days);
 }
