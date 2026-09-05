@@ -648,3 +648,12 @@ export async function resetGoalPlanTx(
     client.release();
   }
 }
+
+/** 删除日程（时间轴 manual 删除；action 排程删除限制在 Service 层判断）。返回删除数。 */
+export async function deleteSchedule(userId: string, scheduleId: string): Promise<number> {
+  const { rowCount } = await getPool().query(
+    `delete from public.schedules where id = $1 and user_id = $2`,
+    [scheduleId, userId],
+  );
+  return rowCount ?? 0;
+}
