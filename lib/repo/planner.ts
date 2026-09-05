@@ -657,3 +657,130 @@ export async function deleteSchedule(userId: string, scheduleId: string): Promis
   );
   return rowCount ?? 0;
 }
+
+// ---------------------------------------------------------------------------
+// Execution 完成 / 撤销事务（Smart Planner Step 5：执行闭环）
+// 语义（DESIGN_SMART_PLANNER_STEP5 §3）：PATCH completed = 唯一写库点，
+//   单事务「置 schedule completed + 生成 execution_record（幂等）」；撤销 = 撤回事实。
+//   **不触碰 action.status**（隔离红线：schedule 完成 ≠ action 完成）。
+// ---------------------------------------------------------------------------
+
+/** 排程时长（分钟）：start_time/end_time 形如 HH:MM[:SS]，表约束保证 end > start */
+function scheduleMinutesOf(startTime: string, endTime: string): number {
+  const [hs, ms] = startTime.split(":").map(Number);
+  const [he, me] = endTime.split(":").map(Number);
+  return (he * 60 + (me || 0)) - (hs * 60 + (ms || 0));
+}
+
+/** 执行记录结构（返回用；与 repo/execution.ts 同构，避免跨文件循环依赖） */
+export type DbExecutionLike = {
+  id: string;
+  user_id: string;
+  schedule_id: string;
+  action_id: string | null;
+  actual_minutes: number;
+  note: string | null;
+  completed_at: string;
+  created_at: string;
+};
+
+export type CompleteScheduleTxResult = {
+  schedule: DbSchedule;
+  execution: DbExecutionLike | null;
+  /** 是否真的插入了新执行记录（重复 completed → false） */
+  inserted: boolean;
+};
+
+/**
+ * 完成排程（单事务）：schedule → completed（completed_at 保留首次）+ 生成 execution_record。
+ * - actualMinutes 缺省 = schedule 时长（end - start）；越界由 Service 层校验 + DB check 兜底。
+ * - schedule_id UNIQUE + on conflict do nothing → 重复完成天然幂等（不产生多行）。
+ * - 不推进 action.status（红线）。
+ * 返回 null 表示排程不存在或非本人。
+ */
+export async function completeScheduleTx(
+  userId: string,
+  scheduleId: string,
+  actualMinutes?: number | null,
+): Promise<CompleteScheduleTxResult | null> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+
+    const lock = await client.query<DbSchedule>(
+      `select ${SCHEDULE_COLUMNS} from public.schedules where id = $1 and user_id = $2 for update`,
+      [scheduleId, userId],
+    );
+    if (lock.rows.length === 0) {
+      await client.query("rollback");
+      return null;
+    }
+    const existing = lock.rows[0];
+
+    const { rows: schedRows } = await client.query<DbSchedule>(
+      `update public.schedules set
+         status = 'completed',
+         completed_at = coalesce(completed_at, now()),
+         updated_at = now()
+       where id = $1 and user_id = $2
+       returning ${SCHEDULE_COLUMNS}`,
+      [scheduleId, userId],
+    );
+    const schedule = schedRows[0];
+
+    const defaultMinutes = scheduleMinutesOf(existing.start_time, existing.end_time);
+    const minutes = actualMinutes != null && actualMinutes > 0 ? Math.round(actualMinutes) : defaultMinutes;
+
+    const exec = await client.query<DbExecutionLike>(
+      `insert into public.execution_records (user_id, schedule_id, action_id, actual_minutes, completed_at)
+       values ($1, $2, $3, $4, now())
+       on conflict (schedule_id) do nothing
+       returning id, user_id, schedule_id, action_id, actual_minutes, note,
+         completed_at, created_at`,
+      [userId, scheduleId, existing.action_id, minutes],
+    );
+
+    await client.query("commit");
+    return { schedule, execution: exec.rows[0] ?? null, inserted: (exec.rowCount ?? 0) > 0 };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** 撤销完成（单事务）：schedule → planned + 清 completed_at + **删除 execution_record（撤回事实）**。 */
+export async function revertScheduleTx(
+  userId: string,
+  scheduleId: string,
+): Promise<DbSchedule | null> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const { rows } = await client.query<DbSchedule>(
+      `update public.schedules set
+         status = 'planned',
+         completed_at = null,
+         updated_at = now()
+       where id = $1 and user_id = $2
+       returning ${SCHEDULE_COLUMNS}`,
+      [scheduleId, userId],
+    );
+    if (rows.length === 0) {
+      await client.query("rollback");
+      return null;
+    }
+    await client.query(
+      `delete from public.execution_records where user_id = $1 and schedule_id = $2`,
+      [userId, scheduleId],
+    );
+    await client.query("commit");
+    return rows[0];
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}

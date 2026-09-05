@@ -88,11 +88,11 @@ async function main(): Promise<void> {
     ok("排序按 start_time asc（09:00 在 19:00 前）", times.indexOf("09:00") < times.indexOf("19:00"));
 
     // 2. E：完成隔离 + F：往返
-    const done = await timelineSvc.setTimelineStatus(userId, todayActionSched.id, "completed");
-    ok("E1 PATCH completed 成功", done.status === "completed" && !!done.completed_at);
+    const doneRes = await timelineSvc.setTimelineStatus(userId, todayActionSched.id, "completed");
+    ok("E1 PATCH completed 成功", doneRes.schedule.status === "completed" && !!doneRes.schedule.completed_at && doneRes.inserted === true);
     const actionAfter = await planRepo.getAction(userId, actA.id);
     ok("E2 schedule completed → action 仍 pending（状态隔离）", actionAfter?.status === "pending");
-    const t1 = done.completed_at;
+    const t1 = doneRes.schedule.completed_at;
     await timelineSvc.setTimelineStatus(userId, todayActionSched.id, "completed");
     const again = await planRepo.getSchedule(userId, todayActionSched.id);
     ok(

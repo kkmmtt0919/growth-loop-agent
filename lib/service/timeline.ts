@@ -1,10 +1,11 @@
 import {
+  completeScheduleTx,
   createSchedules,
   deleteSchedule,
   getSchedule,
   listAvailability,
   listSchedulesByDate,
-  updateScheduleStatus,
+  revertScheduleTx,
   type DbSchedule,
 } from "@/lib/repo/planner";
 import { dateToDbWeekday } from "./planner-scheduler";
@@ -100,21 +101,34 @@ export async function buildTodayTimeline(userId: string): Promise<{ date: string
 }
 
 /**
- * 完成 / 撤销完成某个排程时段（时间轴勾选）。
- * 语义（§6）：只记 completed_at，不推进 action.status（Step 3 验收 E 同源），不写账本/records；
- * 白名单仅 planned/completed（doing/overdue 本期不暴露）。
+ * 完成 / 撤销完成某个排程时段（时间轴勾选；Step 5 起接 execution 事务）。
+ * 语义（§6 / STEP5 §3）：completed → 单事务置 schedule + 生成 execution_record（schedule_id UNIQUE 幂等，
+ *   actualMinutes 缺省 = 排程时长）；planned（撤销）= 撤回事实（清 completed_at + 删 execution）。
+ * **不推进 action.status**（隔离红线）、**不写账本/records**（xp/coin 永不因执行入账）；
+ * 白名单仅 planned/completed。
  */
 export async function setTimelineStatus(
   userId: string,
   scheduleId: string,
   status: "planned" | "completed",
-): Promise<DbSchedule> {
+  actualMinutes?: number | null,
+): Promise<{ schedule: DbSchedule; inserted: boolean }> {
   if (status !== "planned" && status !== "completed") {
     throw new ServiceError("status 应为 planned 或 completed", 400);
   }
-  const updated = await updateScheduleStatus(userId, scheduleId, status);
-  if (!updated) throw new ServiceError("排程不存在", 404);
-  return updated;
+  if (actualMinutes != null) {
+    if (!Number.isInteger(actualMinutes) || actualMinutes < 1 || actualMinutes > 1440) {
+      throw new ServiceError("actualMinutes 应为 1-1440 的整数", 400);
+    }
+  }
+  if (status === "completed") {
+    const result = await completeScheduleTx(userId, scheduleId, actualMinutes);
+    if (!result) throw new ServiceError("排程不存在", 404);
+    return { schedule: result.schedule, inserted: result.inserted };
+  }
+  const reverted = await revertScheduleTx(userId, scheduleId);
+  if (!reverted) throw new ServiceError("排程不存在", 404);
+  return { schedule: reverted, inserted: false };
 }
 
 export type CreateManualInput = { title: string; startTime: string; endTime: string };

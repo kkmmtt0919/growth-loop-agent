@@ -13,16 +13,11 @@ async function call(method, path, body) {
   const data = await res.json().catch(() => ({}));
   return { status: res.status, data };
 }
-const todayLocal = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
 const weekdayToday = () => {
   // 0=周一 … 6=周日
   const d = new Date();
   return (d.getDay() + 6) % 7;
 };
-const hm = (s) => Number(s.slice(0, 2)) * 60 + Number(s.slice(3, 5));
 const getToday = async () => (await call("GET", "/api/schedules/today")).data.items ?? [];
 
 try {
