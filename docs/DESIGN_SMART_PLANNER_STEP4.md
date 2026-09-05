@@ -159,3 +159,7 @@ Step4c 回归    HTTP e2e（真实 LLM accept → today 断言）；旧链路回
 
 - 晚报/周报/chat context 仍只见 tasks+records，**看不到 schedule 执行情况**——计划地图/今日执行与"AI 回顾"出现双轨视角，Step 5 统一校准。
 - stats 双窗口（7/30 天 feasibility）基于 records 实际投入，schedule 完成不计入 minutes——与上面同源，Step 5 一并设计「schedule 完成 → 执行记录」映射。
+
+## §12 设计债（2026-09-05 用户封版审核补充）
+
+- **Design Debt: legacy tasks timeline fallback removal**——MVP 的空态降级（timeline 为空时展示旧 tasks）是渐进迁移期策略。等 Step 5 执行记录完成、周报完成、用户数据迁移完成后，tasks 应**逐步退出主流程**，避免长期出现「今日页 = timeline + legacy tasks」两套执行系统。届时再移除降级分支（demo 原型仍可保留）。当前不改。
