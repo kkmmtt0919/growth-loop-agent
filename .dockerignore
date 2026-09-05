@@ -1,0 +1,14 @@
+node_modules
+.next
+android
+artifacts
+.git
+.gitignore
+.env
+.env.local
+.env.*.local
+docs
+*.md
+!package.json
+!package-lock.json
+.workbuddy

@@ -1,0 +1,45 @@
+# 成长回路（Growth Loop）本地一键启动（Step 7a）
+# 用法：
+#   1) cp .env.example .env            # 填入 DATABASE_URL 等
+#   2) docker compose up -d --build    # 起 app(:3000) + db(:5432)
+#   3) npm run db:setup                # 显式应用 001-015 迁移（两步，不做 entrypoint 自动迁移）
+#
+# 生产：把 db 服务注释掉，DATABASE_URL 指向外部托管 PG（腾讯云/Supabase），业务代码零改动。
+name: growth-loop
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # 本地默认连 compose 内置 db；生产把 DATABASE_URL 填进 .env（并注释下方 db 服务）即自动切换外部库
+      DATABASE_URL: ${DATABASE_URL:-postgresql://gl:gl_dev_pw@db:5432/growth_loop}
+      NODE_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: gl
+      POSTGRES_PASSWORD: gl_dev_pw
+      POSTGRES_DB: growth_loop
+    volumes:
+      - gl_pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gl -d growth_loop"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  gl_pgdata:
