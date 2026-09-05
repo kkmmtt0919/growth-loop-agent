@@ -1,5 +1,15 @@
 # 项目验收
 
+## v1.0.0 验收补充（2026-09-05）
+
+| ID | 验收项 | 结果 | 证据 |
+|---|---|---|---|
+| A-032 | Smart Planner 闭环与离线评测可回归：Goal→Action→Planner→Execution→Weekly→Reflection→Trace，eval 69/69 | 通过（发布验证） | E-030 |
+| A-033 | Docker Compose 空库全量迁移 001–015 幂等 + 容器内注册/建目标可用 | 通过（Docker 实测） | E-030 |
+| A-034 | 首次体验引导与 Agent 只读观测：无目标新账号见引导卡；`GET /api/agent-runs` 只返回白名单字段、未登录 401 | 通过（e2e） | E-030 |
+
+| E-030 | 2026-09-05 | `npm run typecheck`; `npm run lint`; `npm run build`; `npm run eval`；docker compose build + db 容器 healthy + 容器内 `setup-db`；`reflection-http-e2e.mjs` 7/7、`agent-runs-http-e2e.mjs` 10/10 | 全部通过；typecheck/lint 0 错；build 34/34 页面；eval **69/69**；空库 15/15 applied + 幂等重跑「已全部应用」；3100 端口容器 register 200/me 200/goal 201；agent-runs 401/白名单/隔离/倒序 全过 | `docs/RELEASE_NOTES_V1.0.md`、`docs/DEMO_SCRIPT_V1.0.md`、`docs/DESIGN_SMART_PLANNER_STEP6/7.md`、`supabase/migrations/001-015`、`scripts/reflection-http-e2e.mjs`、`scripts/agent-runs-http-e2e.mjs` | v1.0.0 发布验证通过；CI/CD、云托管部署（仅需换 DATABASE_URL）、微信加密回调、Android release 签名仍属边界外 | 工作区、Node HTTP、Docker、PostgreSQL |
+
 ## 数据层验收补充（2026-08-22）
 
 | ID | 验收项 | 结果 | 证据 |

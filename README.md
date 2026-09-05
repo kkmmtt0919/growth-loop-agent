@@ -191,11 +191,15 @@ npm run env:check   # env 预检（dev/prod）
 | [Smart Planner 总设计](docs/DESIGN_SMART_PLANNER_V1.md) | 产品闭环、Step 1–5 设计（Goal→Action→Planner→Schedule→Execution→Weekly） |
 | [Step 6：Reflection + Trace + Eval](docs/DESIGN_SMART_PLANNER_STEP6.md) | 反思反馈注入、LLM 调用链路追踪、离线评测体系 |
 | [Step 7：部署与可交付性](docs/DESIGN_SMART_PLANNER_STEP7.md) | Docker、首次体验引导、Agent 观测、README 重写 |
+| [v1.0.0 Release Notes](docs/RELEASE_NOTES_V1.0.md) | v1.0.0 特性清单、验证证据、已知边界 |
+| [v1.0.0 Demo 脚本](docs/DEMO_SCRIPT_V1.0.md) | 30 分钟部署 + 完整回路演示 + 后台验证 |
 | [开发者与 AI 手册](docs/DEVELOPER_HANDBOOK.md) | clone 到发布的完整交接手册 |
 | [网页服务配置](docs/WEB_SERVICE_SETUP.md) | 干净 clone、环境变量、Web/Node 服务验收与地址边界 |
-| [0.3.0 Roadmap](docs/ROADMAP_0.3.0.md) | MVP 范围与分阶段路线 |
+| [0.3.0 Roadmap](docs/ROADMAP_0.3.0.md) | MVP 范围与分阶段路线（历史规划） |
 | 各阶段设计 | [Agent 晚间](docs/DESIGN_PHASE2_3_AGENT_EVENING.md)、[记录](docs/DESIGN_PHASE4_RECORDS.md)、[周报](docs/DESIGN_PHASE5_WEEKLY.md)、[Eval](docs/DESIGN_PHASE6_EVAL.md)、[聊天面板](docs/DESIGN_CHAT_PANEL_V1.md) 等 |
 | 归档 | 过期设计稿已移入 [docs/archive/](docs/archive/) |
+
+> 注：`DEVELOPER_HANDBOOK.md` 与 `WEB_SERVICE_SETUP.md` 编写于 0.2.0 数据层时代（未覆盖 Smart Planner 排程/打卡/反思/Trace 新链路）；快速上手以本文档与各 `DESIGN_SMART_PLANNER_STEP*` 为准，旧手册的通用流程（clone/env/服务验收）仍有效。
 
 ## 数据、安全与边界
 
@@ -226,4 +230,4 @@ npm run env:check   # env 预检（dev/prod）
 
 ## 当前状态
 
-Smart Planner Step 1–7 已实现（Agent 闭环 + 反思注入 + Trace + Eval 69/69 + Docker 部署 + 首次体验引导 + 观测页），正处于 Step 7 收尾与 release review 阶段。数据库迁移总数 15；版本标签随 release review 定版。
+**v1.0.0（2026-09-05 发布）**：Smart Planner Step 1–7 全链路落地并推送（Agent 闭环 + 反思注入 + Trace + Eval 69/69 + Docker 部署 + 首次体验引导 + 观测页）。数据库迁移总数 15。特性清单与已知边界见 [Release Notes](docs/RELEASE_NOTES_V1.0.md)，可讲演示流程见 [Demo 脚本](docs/DEMO_SCRIPT_V1.0.md)。后续只做 v1 缺陷修复与上云部署准备，不扩展新 AI 功能。

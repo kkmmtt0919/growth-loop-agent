@@ -1,6 +1,6 @@
 {
   "name": "growth-loop-agent",
-  "version": "0.2.0-prototype",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",

@@ -1,5 +1,7 @@
 # 项目总览
 
+> 2026-09-05 v1.0.0 发布基线：Smart Planner Step 1–7 全链路落地（Goal→Action 分解→Planner 排程→Execution 打卡→Weekly/晚报复盘→Reflection 反馈注入→Agent Trace→离线 Eval 69/69），配套 Docker Compose 一键部署 + `db:setup` 幂等迁移 001–015 + 首次体验引导 + 只读观测页；README/Release Notes/Demo 脚本交付。对外口径 v1.0.0（git tag v1.0.0），`0.3.0` 为已完成的历史内部路线。主基线见 docs/DESIGN_SMART_PLANNER_STEP* 与 docs/RELEASE_NOTES_V1.0.md。
+
 > 2026-08-22 数据层基线：邮箱/密码登录与 PostgreSQL 持久化数据层落地（四层架构 API→Service→Repo→PG，自建 JWT + bcrypt，幂等账本，多用户隔离），端到端验证通过（E-028/E-029）。Supabase（PG）托管起步、仅作 PostgreSQL 使用，迁移腾讯云只换 `DATABASE_URL`；未配置时回退 demo 原型。
 
 > 2026-08-21 文档交付基线：README 已补齐快速启动、功能范围、API、LLM、微信、Android、测试、安全边界和贡献流程；新增 `docs/DEVELOPER_HANDBOOK.md` 与 `docs/WEB_SERVICE_SETUP.md`，用于开发者、AI 和新环境操作者区分 Next.js 服务与纯静态托管。
@@ -22,7 +24,7 @@
 - 项目 ID：growth-loop-agent
 - 项目负责人：用户（待补充具体角色）
 - 风险等级：T3（涉及长期个人行为数据、Agent 写操作与微信主动提醒）
-- 当前阶段：MVP 原型实现（数据层已落地，登录闭环验证通过）
+- 当前阶段：**v1.0.0 已发布**（Smart Planner 闭环 + Docker 单机可部署，E-030 验证），进入上云部署准备（替换 DATABASE_URL 即可）；微信加密回调、Android release 签名、CI/CD 仍属边界外。
 - 当前状态：原型可运行 + 邮箱/密码登录 + PostgreSQL 持久化（Supabase 托管起步）；源码、Android 工程、debug APK 与交接文档已发布到 GitHub public；非生产 release
 - 最后更新：2026-08-22
 

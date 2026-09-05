@@ -1,5 +1,13 @@
 # 项目版本
 
+## v1.0.0 基线（2026-09-05）
+
+- `0.2.0-prototype` → **`1.0.0`**：Smart Planner Step 1–7 全链路落地并发布（首个对外可交付版本）。
+- 新增：Goal/Action 分解（图可达校验）、Planner 排程（Availability→零落库 Preview→Accept→Schedule）、Execution 打卡、Weekly 双轨统计、Reflection 反馈注入、Agent Trace（`agent_runs` + 只读 `/api/agent-runs`，隐私裁剪）、离线 Eval 69/69、首次体验引导（onboarding 卡）、Docker Compose 部署 + `db:setup` 幂等迁移 001–015、env 预检。
+- 版本语义：`0.3.0` 为开发期内部路线（docs/ROADMAP_0.3.0.md，已完成）；对外交付口径统一为 **v1.0.0**，git tag `v1.0.0`。
+- 证据：E-030（v1.0.0 发布验证）；基线 `main@6923d06`（Step6 三连 9d261b1/261aff5/d6c25fc + PHASE8 归档 a3fe21b + Step7 三连 3498bef/f1dc97d/6923d06）。
+- 边界：微信明文回调 / Android debug APK 仍为实验模块；无 CI/CD；生产上云仅需替换 `DATABASE_URL`（如腾讯云 PG）。
+
 ## 数据层补充（2026-08-22）
 
 - `0.2.0-prototype` 落地邮箱/密码登录与 PostgreSQL 持久化数据层：四层架构（API→Service→Repo→PG）、`/api/auth/*` 自建 JWT + bcrypt、记录/任务/账本真实入库、多用户隔离、幂等账本。
