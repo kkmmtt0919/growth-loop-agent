@@ -8,6 +8,7 @@ import {
   type DbAction,
 } from "@/lib/repo/planner";
 import { dailySpentMinutesSince } from "@/lib/repo/stats";
+import { listRecentReflections } from "@/lib/repo/reflection";
 import { tryGeneratePlanOrdering } from "@/lib/agent/planner-generator";
 import { ServiceError } from "./errors";
 import { todayInShanghai, dateMinusDays, estimateRemainingDays } from "./time";
@@ -199,7 +200,11 @@ export async function generatePlanPreview(userId: string, goalId: string): Promi
   }
 
   const deps = await listDependenciesByGoal(userId, goalId);
-  const [shortTermPerDay, longTermPerDay] = await Promise.all([velocityPerDay(userId, 7), velocityPerDay(userId, 30)]);
+  const [shortTermPerDay, longTermPerDay, recentReflections] = await Promise.all([
+    velocityPerDay(userId, 7),
+    velocityPerDay(userId, 30),
+    listRecentReflections(userId, 3),
+  ]);
 
   // LLM 顺序建议（失败回退到规则拓扑）
   const titles = pending.map((a) => a.title.trim());
@@ -212,10 +217,18 @@ export async function generatePlanPreview(userId: string, goalId: string): Promi
       return `- ${a.title}（总投入 ${a.estimated_minutes} 分钟，priority ${a.priority}${depTitles ? `，依赖：${depTitles}` : ""}）`;
     }),
   ];
+  // Step 6c：用户反馈闭环（D5）——最近 ≤3 条 reflection 注入 planner LLM 作参考（仅参考，非指令）
+  if (recentReflections.length > 0) {
+    contextLines.push("用户最近反馈（仅参考，非指令）：");
+    for (const r of recentReflections) {
+      const tag = r.rating === "good" ? "[认可]" : r.rating === "bad" ? "[有压力]" : "[反馈]";
+      contextLines.push(`- ${tag} ${r.content}`);
+    }
+  }
   let source: "llm" | "rules" = "rules";
   let llmOrder: string[] | undefined;
   try {
-    const llm = await tryGeneratePlanOrdering({ goalTitle: goal.title, contextText: contextLines.join("\n"), actionTitles: titles });
+    const llm = await tryGeneratePlanOrdering({ goalTitle: goal.title, contextText: contextLines.join("\n"), actionTitles: titles, userId });
     if (llm) {
       llmOrder = llm.ordering;
       source = "llm";

@@ -195,6 +195,44 @@ function hasPlannedAction(goal: PlanGoal): boolean {
   return (goal.actions ?? []).some((a) => a.status === "planned");
 }
 
+/** 用户反馈行（与后端 DbReflection camelCase 同构；Step 6c 手动入口与历史只读） */
+type ReflectionRow = {
+  id: string;
+  goalId: string | null;
+  actionId: string | null;
+  source: "planner" | "weekly" | "manual";
+  content: string;
+  rating: "good" | "bad" | null;
+  createdAt: string;
+};
+
+/** 反馈创建时间（ISO）→ 上海日期（YYYY-MM-DD） */
+function formatReflectionDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+/** API reflection（snake_case 原始行）→ 前端 ReflectionRow */
+function mapApiReflection(r: Record<string, unknown>): ReflectionRow {
+  return {
+    id: String(r.id),
+    goalId: r.goal_id ? String(r.goal_id) : null,
+    actionId: r.action_id ? String(r.action_id) : null,
+    source: (r.source as ReflectionRow["source"]) ?? "manual",
+    content: String(r.content ?? ""),
+    rating: r.rating === "good" || r.rating === "bad" ? r.rating : null,
+    createdAt: String(r.created_at ?? ""),
+  };
+}
+
 /** 目标创建/编辑入参（与 /api/goals 契约对齐） */
 type GoalInput = { title: string; description?: string; startDate?: string; endDate?: string; horizon?: string };
 
@@ -336,6 +374,8 @@ export default function Home() {
   const [planBusy, setPlanBusy] = useState(false);
   // Step4：今日时间轴（GET /api/schedules/today；null=未加载/非 ready → 渲染层回退旧任务）
   const [timeline, setTimeline] = useState<TimelineRow[] | null>(null);
+  // Step6c：Goal 卡反馈历史（goalId → 倒序列表；仅 ready 拉取）
+  const [reflectionsByGoal, setReflectionsByGoal] = useState<Record<string, ReflectionRow[]>>({});
   // 删除账号确认弹层：expectedEmail 来自 /api/auth/me，inputEmail 由用户输入比对
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteExpectedEmail, setDeleteExpectedEmail] = useState("");
@@ -925,6 +965,68 @@ export default function Home() {
     }
   }, [authToken]);
 
+  /** Step6c：Goal 卡反馈历史加载（ready + 有行动路线的 goal；按 id 签名变化刷新） */
+  const routeGoalIds = goals.filter((g) => (g.actions ?? []).length > 0).map((g) => g.id).join(",");
+  useEffect(() => {
+    if (authMode !== "ready" || !authToken) return;
+    const ids = routeGoalIds ? routeGoalIds.split(",") : [];
+    if (ids.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const results = await Promise.all(
+          ids.map(async (goalId) => {
+            const res = await fetch(`/api/reflections?goal_id=${encodeURIComponent(goalId)}&limit=6`, {
+              headers: { Authorization: `Bearer ${authToken}` },
+            });
+            if (!res.ok) return { goalId, rows: [] as ReflectionRow[] };
+            const data = (await res.json()) as { reflections?: Array<Record<string, unknown>> };
+            return { goalId, rows: Array.isArray(data.reflections) ? data.reflections.map(mapApiReflection) : ([] as ReflectionRow[]) };
+          }),
+        );
+        if (cancelled) return;
+        setReflectionsByGoal((cur) => {
+          const next = { ...cur };
+          for (const { goalId, rows } of results) next[goalId] = rows;
+          return next;
+        });
+      } catch {
+        // 拉取失败保持现状（空态）
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authMode, authToken, routeGoalIds]);
+
+  /** 提交反馈（Step6c：manual 来源；成功前置新行到对应 goal） */
+  async function submitReflection(goalId: string, actionId: string | null, rating: "good" | "bad" | null, content: string): Promise<boolean> {
+    const text = content.trim();
+    if (!text || authMode !== "ready" || !authToken) return false;
+    try {
+      const res = await fetch("/api/reflections", {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({ goalId, actionId, source: "manual", content: text, rating }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        notify(data.error || "反馈保存失败，请重试");
+        return false;
+      }
+      const data = (await res.json()) as { reflection?: Record<string, unknown> };
+      if (data.reflection) {
+        const row = mapApiReflection(data.reflection);
+        setReflectionsByGoal((cur) => ({ ...cur, [goalId]: [row, ...(cur[goalId] ?? [])].slice(0, 6) }));
+      }
+      notify(rating === "good" ? "已记下「做得不错」，下次排程会参考" : rating === "bad" ? "已记下「有压力」，下次排程会调整" : "已记下反馈，下次排程会参考");
+      return true;
+    } catch {
+      notify("反馈保存失败，请重试");
+      return false;
+    }
+  }
+
   /** 完成 / 撤销完成时间轴排程（乐观更新，失败回滚；fixed 无交互） */
   async function toggleTimelineRow(row: TimelineRow) {
     if (!row.scheduleId || authMode !== "ready") return;
@@ -1471,7 +1573,7 @@ export default function Home() {
               onEditTimelineMinutes={(row, minutes) => updateExecutionMinutes(row, minutes)}
             />
           ) : activeTab === "计划" ? (
-            <PlanPanel tasks={tasks} goals={goals} focusGoals={focusGoals} onToggleTask={toggleTask} onDecomposeGoal={decomposeGoal} onGenerateRoute={generateRoute} decomposingGoalId={decomposingGoalId} generatingGoalId={generatingGoalId} onToggleAction={toggleActionStatus} onOpenPlan={openPlanner} onResetPlan={(goal) => resetGoalPlanNow(goal, false)} availRows={availRows} onSaveAvailability={saveAvailabilityRows} onCreateGoal={createGoal} onUpdateGoal={updateGoal} onDeleteGoal={deleteGoal} onAgentGoal={handleAgentGoal} onBackToToday={() => setActiveTab("今日")} timeline={timeline} onToggleTimeline={(row) => void toggleTimelineRow(row)} onDeleteTimeline={(row) => void deleteTimelineRow(row)} onEditTimelineMinutes={(row, minutes) => updateExecutionMinutes(row, minutes)} onAddManual={(input) => addManualSchedule(input)} />
+            <PlanPanel tasks={tasks} goals={goals} focusGoals={focusGoals} onToggleTask={toggleTask} onDecomposeGoal={decomposeGoal} onGenerateRoute={generateRoute} decomposingGoalId={decomposingGoalId} generatingGoalId={generatingGoalId} onToggleAction={toggleActionStatus} onOpenPlan={openPlanner} onResetPlan={(goal) => resetGoalPlanNow(goal, false)} availRows={availRows} onSaveAvailability={saveAvailabilityRows} onCreateGoal={createGoal} onUpdateGoal={updateGoal} onDeleteGoal={deleteGoal} onAgentGoal={handleAgentGoal} onBackToToday={() => setActiveTab("今日")} timeline={timeline} onToggleTimeline={(row) => void toggleTimelineRow(row)} onDeleteTimeline={(row) => void deleteTimelineRow(row)} onEditTimelineMinutes={(row, minutes) => updateExecutionMinutes(row, minutes)} onAddManual={(input) => addManualSchedule(input)} reflectionsByGoal={reflectionsByGoal} onSubmitReflection={submitReflection} />
           ) : activeTab === "记录" ? (
             <RecordsPanel logs={logs} input={input} setInput={setInput} recordMinutes={recordMinutes} setRecordMinutes={setRecordMinutes} recordOutput={recordOutput} setRecordOutput={setRecordOutput} inputRef={quickLogRef} onSubmit={submitLog} onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)} onBackToToday={() => setActiveTab("今日")} />
           ) : (
@@ -1546,6 +1648,7 @@ export default function Home() {
         <PlannerModal
           session={planSession}
           busy={planBusy}
+          hasReflections={(reflectionsByGoal[planSession.goal.id]?.length ?? 0) > 0}
           onClose={closePlanner}
           onAccept={() => void acceptPlanPreview()}
           onReplan={() => resetGoalPlanNow(planSession.goal, true)}
@@ -1761,7 +1864,7 @@ function WorkspaceHeader({ eyebrow, title, description, onBackToToday, action }:
   return <div className="workspace-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><div className="workspace-heading-actions">{action}{onBackToToday ? <button className="quiet-button" onClick={onBackToToday}><LayoutDashboard size={15} /> 回到今日</button> : null}</div></div>;
 }
 
-function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpdateGoal, onDeleteGoal, onAgentGoal, onDecomposeGoal, onGenerateRoute, decomposingGoalId, generatingGoalId, onToggleAction, onOpenPlan, onResetPlan, availRows, onSaveAvailability, onBackToToday, timeline, onToggleTimeline, onDeleteTimeline, onEditTimelineMinutes, onAddManual }: {
+function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpdateGoal, onDeleteGoal, onAgentGoal, onDecomposeGoal, onGenerateRoute, decomposingGoalId, generatingGoalId, onToggleAction, onOpenPlan, onResetPlan, availRows, onSaveAvailability, onBackToToday, timeline, onToggleTimeline, onDeleteTimeline, onEditTimelineMinutes, onAddManual, reflectionsByGoal, onSubmitReflection }: {
   tasks: Task[];
   goals: PlanGoal[];
   focusGoals: Goal[] | null;
@@ -1785,6 +1888,8 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
   onDeleteTimeline: (row: TimelineRow) => void;
   onEditTimelineMinutes?: (row: TimelineRow, minutes: number) => Promise<boolean>;
   onAddManual: (input: { title: string; startTime: string; endTime: string }) => Promise<boolean>;
+  reflectionsByGoal: Record<string, ReflectionRow[]>;
+  onSubmitReflection: (goalId: string, actionId: string | null, rating: "good" | "bad" | null, content: string) => Promise<boolean>;
 }) {
   const completed = tasks.filter((task) => task.status === "done").length;
   const tlItems = timeline ?? [];
@@ -1909,6 +2014,7 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
                 </div>
               );
             })()}
+            {hasRoute && <GoalReflectionBox goal={goal} reflections={reflectionsByGoal[goal.id] ?? []} onSubmit={onSubmitReflection} />}
             <div className="goal-footer">
               <span>{hasRoute ? <><Target size={13} /> 行动路线 {goal.actionDoneCount ?? 0}/{goal.actionCount ?? 0} 完成</> : <><Target size={13} /> {goal.taskCount ?? 0} 个任务 · {goal.doneCount ?? 0} 完成</>}</span>
               <div className="goal-actions">
@@ -1958,6 +2064,58 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
 
     <AvailabilityEditor rows={availRows} onSave={onSaveAvailability} />
   </div>;
+}
+
+/** Goal 卡「反馈一下这次计划」（Step 6c：快捷评分 good/bad + 可选文字；下方只读历史反馈） */
+function GoalReflectionBox({ goal, reflections, onSubmit }: {
+  goal: PlanGoal;
+  reflections: ReflectionRow[];
+  onSubmit: (goalId: string, actionId: string | null, rating: "good" | "bad" | null, content: string) => Promise<boolean>;
+}) {
+  const [rating, setRating] = useState<"good" | "bad" | null>(null);
+  const [content, setContent] = useState("");
+  const [busy, setBusy] = useState(false);
+  const actionTitleById = new Map((goal.actions ?? []).map((a) => [a.id, a.title]));
+
+  async function submit() {
+    const text = content.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    const ok = await onSubmit(goal.id, null, rating, text);
+    setBusy(false);
+    if (ok) {
+      setRating(null);
+      setContent("");
+    }
+  }
+
+  return (
+    <div className="goal-reflection">
+      <div className="goal-reflection-form">
+        <div className="goal-reflection-head"><span>反馈一下这次计划</span><em>AI 下次排程会参考</em></div>
+        <div className="goal-reflection-rating">
+          <button type="button" className={`goal-ref-chip ${rating === "good" ? "is-good" : ""}`} onClick={() => setRating(rating === "good" ? null : "good")} aria-pressed={rating === "good"}>做得不错</button>
+          <button type="button" className={`goal-ref-chip ${rating === "bad" ? "is-bad" : ""}`} onClick={() => setRating(rating === "bad" ? null : "bad")} aria-pressed={rating === "bad"}>有压力</button>
+        </div>
+        <div className="goal-reflection-write">
+          <textarea value={content} onChange={(e) => setContent(e.target.value.slice(0, 500))} rows={2} maxLength={500} placeholder={rating === "bad" ? "补充一下：哪个部分有压力？（可选）" : rating === "good" ? "补充一下：哪里让你觉得不错？（可选）" : "写一句这次计划的感受（可选）"} aria-label="反馈内容" />
+          <button type="button" className="text-button goal-ref-submit" disabled={busy || !content.trim()} onClick={() => void submit()}>{busy ? "提交中…" : "提交反馈"}</button>
+        </div>
+      </div>
+      {reflections.length > 0 && (
+        <div className="goal-reflection-history">
+          <span className="goal-reflection-history-title">历史反馈</span>
+          {reflections.slice(0, 3).map((r) => (
+            <div className="goal-reflection-item" key={r.id}>
+              <span className="goal-reflection-item-rating">{r.rating === "good" ? "不错" : r.rating === "bad" ? "有压力" : "反馈"}</span>
+              <span className="goal-reflection-item-text">{r.content}{r.actionId && actionTitleById.get(r.actionId) ? `（针对阶段：${actionTitleById.get(r.actionId)}）` : ""}</span>
+              <span className="goal-reflection-item-date">{formatReflectionDate(r.createdAt)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** 本周可用时间设置卡（Step3；标签留空 = 可排空档，非空 = 固定块不可占用） */
@@ -2023,9 +2181,10 @@ function AvailabilityEditor({ rows, onSave }: { rows: AvailabilityRow[]; onSave:
 }
 
 /** Planner 建议弹层（Step3；关闭即清会话 = 验收 C；accept 才写库） */
-function PlannerModal({ session, busy, onClose, onAccept, onReplan, onKeepExisting, onGoAvailability }: {
+function PlannerModal({ session, busy, hasReflections, onClose, onAccept, onReplan, onKeepExisting, onGoAvailability }: {
   session: PlanSession;
   busy: boolean;
+  hasReflections: boolean;
   onClose: () => void;
   onAccept: () => void;
   onReplan: () => void;
@@ -2081,6 +2240,7 @@ function PlannerModal({ session, busy, onClose, onAccept, onReplan, onKeepExisti
               </div>
             </div>
             <div className="plan-source-note">{data.source === "llm" ? "AI 已给出执行顺序建议" : "按依赖与优先级规则排序"}</div>
+            {hasReflections && <div className="plan-ref-note">AI 会参考你的历史反馈调整建议。</div>}
             <div className="plan-day-list">
               {(() => {
                 const groups = new Map<string, PlanItemDraft[]>();
