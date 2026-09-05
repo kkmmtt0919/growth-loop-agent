@@ -58,7 +58,7 @@ export async function generateEveningReport(userId: string): Promise<EveningRepo
   });
 
   const { content, replySource } = meaningful
-    ? await generateEveningDigest(contextText, fallback)
+    ? await generateEveningDigest(contextText, fallback, userId)
     : { content: fallback, replySource: "rules" as const };
   if (replySource === "rules") {
     // 规则回退时在 summary 里保留完整上下文，用户仍能看到今天发生了什么

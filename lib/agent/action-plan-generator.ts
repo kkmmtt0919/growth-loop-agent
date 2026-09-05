@@ -97,18 +97,22 @@ export function ruleActionPlanSteps(goalTitle: string, range: { min: number; max
  * 校验只过滤「结构非法 / 与整目标重复 / 与已有行动重复」的步；
  * dependsOnTitles 的**跨步引用解析在 Service 层做**（title → id），这里保留标题引用。
  */
+export const ACTION_PLAN_PROMPT_VERSION = "action-plan-v1";
+
 export async function generateActionPlan(input: {
   goalTitle: string;
   contextText: string;
   range: { min: number; max: number };
   existingTitles: string[];
+  userId?: string | null;
 }): Promise<ActionPlanResult> {
   const { goalTitle, contextText, range, existingTitles } = input;
   const system = SYSTEM_PROMPT.replace("{min}", String(range.min)).replace("{max}", String(range.max));
+  const trace = { userId: input.userId ?? null, agentType: "action-plan" as const, promptVersion: ACTION_PLAN_PROMPT_VERSION };
 
   async function attempt(feedback?: string): Promise<ActionStep[] | null> {
     const user = `数据：\n${contextText}\n\n示例输出（仅参考格式）：\n${EXAMPLE_OUTPUT}` + (feedback ? `\n\n上一次生成存在以下问题，请修正后重新生成：${feedback}` : "");
-    const text = await callLLMJson({ system, user, temperature: 0.4, timeoutMs: 20_000 });
+    const text = await callLLMJson({ system, user, temperature: 0.4, timeoutMs: 20_000, trace });
     if (!text) return null;
     const parsed = parsePlan(text, range);
     if (!parsed) return null;

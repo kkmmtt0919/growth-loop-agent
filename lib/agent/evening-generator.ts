@@ -1,4 +1,4 @@
-import { readConfig } from "./provider";
+import { callLLMJson } from "./llm-json";
 import { extractJson, isEveningContent } from "./core/pure";
 import type { EveningContent } from "./core/pure";
 
@@ -35,51 +35,25 @@ export type EveningDigestResult = {
  * @param contextText 由 contextToText 生成的上下文文本（token 可控）
  * @param fallback    规则回退内容（由调用方基于真实记录构造，保证 LLM 不可用时体验完整）
  */
+export const EVENING_PROMPT_VERSION = "evening-v1";
+
 export async function generateEveningDigest(
   contextText: string,
   fallback: EveningContent,
+  userId?: string | null,
 ): Promise<EveningDigestResult> {
-  const config = readConfig();
-  if (!config.baseUrl || !config.apiKey || !config.model) {
-    return { content: fallback, replySource: "rules" };
+  const llmText = await callLLMJson({
+    system: SYSTEM_PROMPT,
+    user: `用户今日数据：\n${contextText}`,
+    temperature: 0.2,
+    timeoutMs: 15_000,
+    trace: { userId: userId ?? null, agentType: "evening", promptVersion: EVENING_PROMPT_VERSION },
+  });
+  if (!llmText) return { content: fallback, replySource: "rules" };
+
+  const parsed = extractJson(llmText);
+  if (isEveningContent(parsed)) {
+    return { content: parsed, replySource: "llm" };
   }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
-
-  try {
-    const response = await fetch(`${config.baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: `用户今日数据：\n${contextText}` },
-        ],
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      return { content: fallback, replySource: "rules" };
-    }
-
-    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    const llmText = data.choices?.[0]?.message?.content;
-    const parsed = llmText ? extractJson(llmText) : null;
-    if (isEveningContent(parsed)) {
-      return { content: parsed, replySource: "llm" };
-    }
-    return { content: fallback, replySource: "rules" };
-  } catch {
-    return { content: fallback, replySource: "rules" };
-  } finally {
-    clearTimeout(timeout);
-  }
+  return { content: fallback, replySource: "rules" };
 }

@@ -28,14 +28,23 @@ export type PlanOrderingResult = {
   note: string;
 };
 
+export const PLANNER_PROMPT_VERSION = "planner-v1";
+
 /** 一次 LLM 排序尝试；解析失败返回 null */
 export async function tryGeneratePlanOrdering(input: {
   goalTitle: string;
   contextText: string;
   actionTitles: string[];
+  userId?: string | null;
 }): Promise<PlanOrderingResult | null> {
   const user = `数据：\n${input.contextText}`;
-  const text = await callLLMJson({ system: SYSTEM_PROMPT, user, temperature: 0.2, timeoutMs: 15_000 });
+  const text = await callLLMJson({
+    system: SYSTEM_PROMPT,
+    user,
+    temperature: 0.2,
+    timeoutMs: 15_000,
+    trace: { userId: input.userId ?? null, agentType: "planner", promptVersion: PLANNER_PROMPT_VERSION },
+  });
   if (!text) return null;
   let parsed: unknown;
   try {

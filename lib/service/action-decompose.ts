@@ -83,6 +83,7 @@ export async function decomposeToActions(userId: string, goalId: string): Promis
     contextText,
     range,
     existingTitles,
+    userId,
   });
 
   const { actions, dependencies, skipped } = await createActionsWithDepsTx(

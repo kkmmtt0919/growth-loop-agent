@@ -1,4 +1,4 @@
-import { readConfig } from "./provider";
+import { callLLMJson } from "./llm-json";
 import { extractJson, extractWeeklyText, isValidGoalSuggestion } from "./core/pure";
 import type { WeeklyContent } from "./core/pure";
 
@@ -51,62 +51,32 @@ const SYSTEM_PROMPT = `你是成长回路的成长教练。根据用户的真实
  * @param contextText 由 weeklyContextToText 生成的上下文文本（token 可控）
  * @param statsText   用于 prompt 内展示的、系统已算好的 stats 文本（LLM 不得改动，仅作参考）
  */
+export const WEEKLY_PROMPT_VERSION = "weekly-v1";
+
 export async function generateWeeklyDigest(
   contextText: string,
   statsText: string,
+  userId?: string | null,
 ): Promise<WeeklyDigestResult> {
-  const config = readConfig();
-  if (!config.baseUrl || !config.apiKey || !config.model) {
-    return { text: null, goalSuggestions: [], replySource: "rules" };
-  }
+  const llmText = await callLLMJson({
+    system: SYSTEM_PROMPT,
+    user: `本周系统统计（已核实，请勿修改）：\n${statsText}\n\n用户本周数据：\n${contextText}`,
+    temperature: 0.2,
+    timeoutMs: 15_000,
+    trace: { userId: userId ?? null, agentType: "weekly", promptVersion: WEEKLY_PROMPT_VERSION },
+  });
+  if (!llmText) return { text: null, goalSuggestions: [], replySource: "rules" };
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const parsed = extractJson(llmText);
+  const text = extractWeeklyText(parsed);
+  const rawSuggestions =
+    parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>).goalSuggestions
+      : null;
 
-  try {
-    const response = await fetch(`${config.baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `本周系统统计（已核实，请勿修改）：\n${statsText}\n\n用户本周数据：\n${contextText}`,
-          },
-        ],
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      return { text: null, goalSuggestions: [], replySource: "rules" };
-    }
-
-    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    const llmText = data.choices?.[0]?.message?.content;
-    const parsed = llmText ? extractJson(llmText) : null;
-
-    const text = extractWeeklyText(parsed);
-    const rawSuggestions =
-      parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>).goalSuggestions
-        : null;
-
-    return {
-      text,
-      goalSuggestions: Array.isArray(rawSuggestions) ? rawSuggestions.filter(isValidGoalSuggestion) : [],
-      replySource: text ? "llm" : "rules",
-    };
-  } catch {
-    return { text: null, goalSuggestions: [], replySource: "rules" };
-  } finally {
-    clearTimeout(timeout);
-  }
+  return {
+    text,
+    goalSuggestions: Array.isArray(rawSuggestions) ? rawSuggestions.filter(isValidGoalSuggestion) : [],
+    replySource: text ? "llm" : "rules",
+  };
 }

@@ -219,7 +219,7 @@ export async function generateWeeklyReport(userId: string): Promise<WeeklyReport
   });
 
   const digest = meaningful
-    ? await generateWeeklyDigest(contextText, statsToText(stats))
+    ? await generateWeeklyDigest(contextText, statsToText(stats), userId)
     : { text: null, goalSuggestions: [], replySource: "rules" as const };
   const { text, goalSuggestions, replySource } = digest;
   const finalReplySource = text ? replySource : ("rules" as const);
