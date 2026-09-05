@@ -1741,3 +1741,36 @@ h1 { margin-top: 15px; color: var(--ink); font: 600 clamp(29px, 3.2vw, 40px)/1.1
 .plan-item-title { color: var(--ink); font-size: 12px; }
 .plan-remain-note { margin-top: 9px; color: #a0715a; font-size: 11px; }
 .plan-dialog-actions { display: flex; gap: 10px; margin-top: 13px; flex-wrap: wrap; }
+
+/* ===== Smart Planner Step 4：今日时间轴（schedules 聚合 + legacy 折叠池）===== */
+.timeline-list { gap: 6px !important; }
+.timeline-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.6); }
+.timeline-item.is-done { opacity: .62; }
+.timeline-item.is-done .timeline-title-line h3 { text-decoration: line-through; }
+.timeline-item.type-fixed { background: rgba(240,120,92,.05); border-color: #ecd7cf; }
+.timeline-time { flex: 0 0 72px; display: grid; line-height: 1.3; }
+.timeline-time strong { font: 10px 'DM Mono', monospace; color: var(--coral); }
+.timeline-time span { font: 9px 'DM Mono', monospace; color: #a2a9a2; }
+.timeline-copy { flex: 1; min-width: 0; }
+.timeline-title-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.timeline-title-line h3 { color: var(--ink); font-size: 12px; font-weight: 500; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.timeline-badge { flex: 0 0 auto; padding: 1px 7px; border-radius: 99px; font-size: 9px; color: #fff; }
+.timeline-badge.src-action { background: var(--sage); }
+.timeline-badge.src-manual { background: #7d9bb5; }
+.timeline-badge.src-fixed { background: #d8a14a; }
+.timeline-check { flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid #cfd3cb; background: transparent; display: grid; place-items: center; color: #fff; cursor: pointer; padding: 0; }
+.timeline-check span { width: 6px; height: 6px; border-radius: 50%; background: #cfd3cb; }
+.timeline-check.checked { background: var(--sage); border-color: var(--sage); }
+.timeline-del { flex: 0 0 auto; width: 24px; height: 24px; display: grid; place-items: center; color: #b0b5ae; background: transparent; cursor: pointer; }
+.timeline-del:hover { color: var(--coral); }
+.timeline-legacy-pool { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.timeline-legacy-pool summary { cursor: pointer; color: #a2a9a2; font-size: 10px; }
+.timeline-legacy-pool .schedule-list { margin-top: 8px; }
+.timeline-add { margin-top: 10px; }
+.timeline-add-btn { display: inline-flex; align-items: center; gap: 5px; }
+.timeline-manual-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.timeline-manual-form input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; font-size: 11px; background: var(--white); color: var(--ink); }
+.timeline-manual-form input[type="time"] { font: 11px 'DM Mono', monospace; }
+.timeline-manual-form input[type="text"] { flex: 1; min-width: 160px; }
+.timeline-empty-guide { color: #a2a9a2; font-size: 11px; line-height: 1.7; padding: 4px 2px; }
+.agenda-empty { color: #a2a9a2; font-size: 11px; line-height: 1.6; padding: 6px 2px; }

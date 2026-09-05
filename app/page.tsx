@@ -136,6 +136,20 @@ function formatActionMinutes(min: number): string {
 
 type AvailabilityRow = { weekday: number; startTime: string; endTime: string; type: "learn" | "work" | "exercise" | "life" | "rest"; title: string };
 
+/** 今日时间轴项（与后端 TimelineItem 同构；Step 4「时间语义层」，唯一执行数据源） */
+type TimelineRow = {
+  key: string;
+  type: "action" | "manual" | "fixed";
+  title: string;
+  startTime: string;
+  endTime: string;
+  status: "planned" | "completed";
+  scheduleId?: string;
+  actionId?: string | null;
+  goalId?: string | null;
+  source?: "action" | "manual";
+};
+
 type PlanFeasibility = {
   totalMinutes: number;
   remainingDays: number;
@@ -315,6 +329,8 @@ export default function Home() {
   const [availRows, setAvailRows] = useState<AvailabilityRow[]>([]);
   const [planSession, setPlanSession] = useState<PlanSession | null>(null);
   const [planBusy, setPlanBusy] = useState(false);
+  // Step4：今日时间轴（GET /api/schedules/today；null=未加载/非 ready → 渲染层回退旧任务）
+  const [timeline, setTimeline] = useState<TimelineRow[] | null>(null);
   // 删除账号确认弹层：expectedEmail 来自 /api/auth/me，inputEmail 由用户输入比对
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteExpectedEmail, setDeleteExpectedEmail] = useState("");
@@ -889,6 +905,95 @@ export default function Home() {
     return true;
   }
 
+  /** 今日时间轴加载（唯一 Schedule 来源 GET /api/schedules/today；失败保持 null → 渲染层回退旧任务） */
+  const loadTodayTimeline = useCallback(async () => {
+    if (!authToken) return;
+    try {
+      const res = await fetch("/api/schedules/today", {
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+      });
+      if (!res.ok) throw new Error("timeline unavailable");
+      const data = (await res.json()) as { items?: TimelineRow[] };
+      setTimeline(Array.isArray(data.items) ? data.items : []);
+    } catch {
+      // 静默：渲染层按 timeline===null 回退旧任务视图
+    }
+  }, [authToken]);
+
+  /** 完成 / 撤销完成时间轴排程（乐观更新，失败回滚；fixed 无交互） */
+  async function toggleTimelineRow(row: TimelineRow) {
+    if (!row.scheduleId || authMode !== "ready") return;
+    const next = row.status === "completed" ? "planned" : "completed";
+    setTimeline((cur) => (cur ? cur.map((i) => (i.key === row.key ? { ...i, status: next } : i)) : cur));
+    try {
+      const res = await fetch(`/api/schedules/${row.scheduleId}`, {
+        method: "PATCH",
+        headers: apiHeaders(),
+        body: JSON.stringify({ status: next }),
+      });
+      if (!res.ok) throw new Error("patch failed");
+      notify(next === "completed" ? "已记下这个时段的完成" : "已把该时段放回待执行");
+    } catch {
+      setTimeline((cur) => (cur ? cur.map((i) => (i.key === row.key ? { ...i, status: row.status } : i)) : cur));
+      notify("时段状态更新失败，请重试");
+    }
+  }
+
+  /** 删除手动事项（仅 manual 行有删除钮；action 排程删除后端 409，撤销走「撤销安排」） */
+  async function deleteTimelineRow(row: TimelineRow) {
+    if (!row.scheduleId || row.type !== "manual" || authMode !== "ready") return;
+    if (!window.confirm(`删除手动安排「${row.title}」？`)) return;
+    try {
+      const res = await fetch(`/api/schedules/${row.scheduleId}`, { method: "DELETE", headers: apiHeaders() });
+      if (!res.ok) throw new Error("delete failed");
+      setTimeline((cur) => (cur ? cur.filter((i) => i.key !== row.key) : cur));
+      notify("已删除这条手动安排");
+    } catch {
+      notify("删除失败，请重试");
+    }
+  }
+
+  /** 手动添加今日事项（POST /api/schedules → 刷新时间轴） */
+  async function addManualSchedule(input: { title: string; startTime: string; endTime: string }) {
+    if (!requireAuth()) return false;
+    try {
+      const res = await fetch("/api/schedules", {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) throw new Error("add failed");
+      await loadTodayTimeline();
+      notify("已加入今日安排");
+      return true;
+    } catch {
+      notify("保存失败，请重试");
+      return false;
+    }
+  }
+
+  // Step4：进入执行视图（今日/计划 tab）且已登录 → 刷新今日时间轴（accept/reset 后由各自 handler 主动刷新）
+  useEffect(() => {
+    if (authMode !== "ready" || !authToken) return;
+    if (activeTab !== "今日" && activeTab !== "计划") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/schedules/today", {
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        });
+        if (!res.ok) throw new Error("timeline unavailable");
+        const data = (await res.json()) as { items?: TimelineRow[] };
+        if (!cancelled) setTimeline(Array.isArray(data.items) ? data.items : []);
+      } catch {
+        // 失败保持 null → 渲染层回退旧任务视图
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, authMode, authToken]);
+
   async function createGoal(input: GoalInput) {
     if (!requireAuth()) return;
     try {
@@ -1137,7 +1242,7 @@ export default function Home() {
       if (!res.ok) throw new Error(payload.error || "accept failed");
       const covered = new Set(items.map((it) => it.actionId)).size;
       setPlanSession(null);
-      await refreshGoals();
+      await Promise.all([refreshGoals(), loadTodayTimeline()]);
       notify(`计划已安排：未来 14 天生成 ${payload.accepted ?? items.length} 个学习时段，涉及 ${covered} 个行动阶段。执行列表之后可在今日时间轴查看。`);
     } catch {
       notify("接受计划失败，请重试");
@@ -1152,7 +1257,7 @@ export default function Home() {
     try {
       const res = await fetch(`/api/goals/${goal.id}/plan/reset`, { method: "POST", headers: apiHeaders() });
       if (!res.ok) throw new Error("reset failed");
-      await refreshGoals();
+      await Promise.all([refreshGoals(), loadTodayTimeline()]);
       if (thenPreview) {
         setPlanSession(null);
         await loadPlanPreview(goal);
@@ -1332,9 +1437,12 @@ export default function Home() {
               pomodoroVisible={showPomodoro}
               onTogglePomodoro={() => setShowPomodoro((visible) => !visible)}
               pomodoro={<PomodoroWidget mode={pomodoroMode} seconds={pomodoroSeconds} isRunning={isPomodoroRunning} onToggle={togglePomodoro} onReset={resetPomodoro} onModeChange={changePomodoroMode} />}
+              timeline={timeline}
+              onToggleTimeline={(row) => void toggleTimelineRow(row)}
+              onDeleteTimeline={(row) => void deleteTimelineRow(row)}
             />
           ) : activeTab === "计划" ? (
-            <PlanPanel tasks={tasks} goals={goals} focusGoals={focusGoals} onToggleTask={toggleTask} onDecomposeGoal={decomposeGoal} onGenerateRoute={generateRoute} decomposingGoalId={decomposingGoalId} generatingGoalId={generatingGoalId} onToggleAction={toggleActionStatus} onOpenPlan={openPlanner} onResetPlan={(goal) => resetGoalPlanNow(goal, false)} availRows={availRows} onSaveAvailability={saveAvailabilityRows} onCreateGoal={createGoal} onUpdateGoal={updateGoal} onDeleteGoal={deleteGoal} onAgentGoal={handleAgentGoal} onBackToToday={() => setActiveTab("今日")} />
+            <PlanPanel tasks={tasks} goals={goals} focusGoals={focusGoals} onToggleTask={toggleTask} onDecomposeGoal={decomposeGoal} onGenerateRoute={generateRoute} decomposingGoalId={decomposingGoalId} generatingGoalId={generatingGoalId} onToggleAction={toggleActionStatus} onOpenPlan={openPlanner} onResetPlan={(goal) => resetGoalPlanNow(goal, false)} availRows={availRows} onSaveAvailability={saveAvailabilityRows} onCreateGoal={createGoal} onUpdateGoal={updateGoal} onDeleteGoal={deleteGoal} onAgentGoal={handleAgentGoal} onBackToToday={() => setActiveTab("今日")} timeline={timeline} onToggleTimeline={(row) => void toggleTimelineRow(row)} onDeleteTimeline={(row) => void deleteTimelineRow(row)} onAddManual={(input) => addManualSchedule(input)} />
           ) : activeTab === "记录" ? (
             <RecordsPanel logs={logs} input={input} setInput={setInput} recordMinutes={recordMinutes} setRecordMinutes={setRecordMinutes} recordOutput={recordOutput} setRecordOutput={setRecordOutput} inputRef={quickLogRef} onSubmit={submitLog} onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)} onBackToToday={() => setActiveTab("今日")} />
           ) : (
@@ -1452,10 +1560,16 @@ type TodayHomeProps = {
   pomodoroVisible: boolean;
   onTogglePomodoro: () => void;
   pomodoro: React.ReactNode;
+  timeline: TimelineRow[] | null;
+  onToggleTimeline: (row: TimelineRow) => void;
+  onDeleteTimeline: (row: TimelineRow) => void;
 };
 
-function TodayHome({ greeting, tasks, doneCount, input, setInput, recordMinutes, setRecordMinutes, recordOutput, setRecordOutput, quickLogRef, onSubmit, onToggleTask, onOpenPlan, assistantReply, isAgentBusy, reviewEnabled, onToggleReview, onStartReview, evening, eveningTime, pomodoroVisible, onTogglePomodoro, pomodoro }: TodayHomeProps) {
+function TodayHome({ greeting, tasks, doneCount, input, setInput, recordMinutes, setRecordMinutes, recordOutput, setRecordOutput, quickLogRef, onSubmit, onToggleTask, onOpenPlan, assistantReply, isAgentBusy, reviewEnabled, onToggleReview, onStartReview, evening, eveningTime, pomodoroVisible, onTogglePomodoro, pomodoro, timeline, onToggleTimeline, onDeleteTimeline }: TodayHomeProps) {
   const visibleTasks = tasks.slice(0, 4);
+  const tlItems = timeline ?? [];
+  const timelineMode = tlItems.length > 0;
+  const tlDone = tlItems.filter((x) => x.status === "completed").length;
   return <div className="home-command-center">
     <section className="home-intro">
       <div>
@@ -1487,8 +1601,9 @@ function TodayHome({ greeting, tasks, doneCount, input, setInput, recordMinutes,
 
     <section className="home-agenda-grid">
       <div className="home-agenda-card">
-        <div className="home-section-head"><div><span className="eyebrow">TODAY AGENDA</span><h2>今天要做的事</h2></div><span className="agenda-count">{doneCount}/{tasks.length} 完成</span></div>
-        <div className="home-agenda-list">{visibleTasks.map((task) => <HomeAgendaRow key={task.id} task={task} onToggle={onToggleTask} />)}</div>
+        <div className="home-section-head"><div><span className="eyebrow">TODAY AGENDA</span><h2>{timelineMode ? "今日安排" : "今天要做的事"}</h2></div><span className="agenda-count">{timelineMode ? `${tlDone}/${tlItems.length} 已完成` : `${doneCount}/${tasks.length} 完成`}</span></div>
+        <div className="home-agenda-list">{timelineMode ? tlItems.slice(0, 4).map((row) => <TimelineItemCard key={row.key} row={row} onToggle={onToggleTimeline} onDelete={onDeleteTimeline} />) : visibleTasks.map((task) => <HomeAgendaRow key={task.id} task={task} onToggle={onToggleTask} />)}</div>
+        {!timelineMode && tasks.length === 0 && <p className="agenda-empty">今天还没有安排：在「计划地图」给目标制定行动路线并安排计划，时间轴会从这里长出真实的下一步。</p>}
         <div className="home-agenda-footer"><button className="home-more-button" onClick={onOpenPlan}>查看完整计划 <ChevronRight size={15} /></button><button className="home-focus-link" onClick={onTogglePomodoro}><Timer size={14} />{pomodoroVisible ? "收起专注工具" : "需要节奏？打开 25 分钟"}</button></div>
         {pomodoroVisible && <div className="home-pomodoro-slot">{pomodoro}</div>}
       </div>
@@ -1522,6 +1637,36 @@ function EveningStructured({ content }: { content: Record<string, unknown> }) {
     {problem.length > 0 && <div className="evening-block"><strong>遇到的阻碍</strong><ul>{problem.map((p) => <li key={p}>{p}</li>)}</ul></div>}
     {suggestion.length > 0 && <div className="evening-block"><strong>明日建议</strong><ul>{suggestion.map((s) => <li key={s}>{s}</li>)}</ul></div>}
   </div>;
+}
+
+/** 时间轴行（Step 4）：action/manual/fixed 统一卡片；fixed 纯展示，manual 带删除钮 */
+function TimelineItemCard({ row, onToggle, onDelete }: { row: TimelineRow; onToggle: (row: TimelineRow) => void; onDelete: (row: TimelineRow) => void }) {
+  const interactive = row.type !== "fixed" && !!row.scheduleId;
+  return (
+    <div className={`timeline-item type-${row.type} ${row.status === "completed" ? "is-done" : ""}`}>
+      <div className="timeline-time"><strong>{row.startTime}</strong><span>{row.endTime}</span></div>
+      <div className="timeline-copy">
+        <div className="timeline-title-line">
+          <h3>{row.title}</h3>
+          <span className={`timeline-badge src-${row.type}`}>{row.type === "action" ? "AI安排" : row.type === "manual" ? "手动" : "固定时间"}</span>
+        </div>
+      </div>
+      {interactive && (
+        <button
+          className={`timeline-check ${row.status === "completed" ? "checked" : ""}`}
+          onClick={() => onToggle(row)}
+          aria-label={`${row.status === "completed" ? "撤销" : "完成"}：${row.title}`}
+        >
+          {row.status === "completed" ? <Check size={15} strokeWidth={3} /> : <span />}
+        </button>
+      )}
+      {row.type === "manual" && row.scheduleId && (
+        <button className="timeline-del" onClick={() => onDelete(row)} aria-label={`删除：${row.title}`}>
+          <Trash2 size={13} />
+        </button>
+      )}
+    </div>
+  );
 }
 
 function HomeAgendaRow({ task, onToggle }: { task: Task; onToggle: (id: string) => void }) {
@@ -1561,7 +1706,7 @@ function WorkspaceHeader({ eyebrow, title, description, onBackToToday, action }:
   return <div className="workspace-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><div className="workspace-heading-actions">{action}{onBackToToday ? <button className="quiet-button" onClick={onBackToToday}><LayoutDashboard size={15} /> 回到今日</button> : null}</div></div>;
 }
 
-function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpdateGoal, onDeleteGoal, onAgentGoal, onDecomposeGoal, onGenerateRoute, decomposingGoalId, generatingGoalId, onToggleAction, onOpenPlan, onResetPlan, availRows, onSaveAvailability, onBackToToday }: {
+function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpdateGoal, onDeleteGoal, onAgentGoal, onDecomposeGoal, onGenerateRoute, decomposingGoalId, generatingGoalId, onToggleAction, onOpenPlan, onResetPlan, availRows, onSaveAvailability, onBackToToday, timeline, onToggleTimeline, onDeleteTimeline, onAddManual }: {
   tasks: Task[];
   goals: PlanGoal[];
   focusGoals: Goal[] | null;
@@ -1580,12 +1725,53 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
   availRows: AvailabilityRow[];
   onSaveAvailability: (rows: AvailabilityRow[]) => void;
   onBackToToday?: () => void;
+  timeline: TimelineRow[] | null;
+  onToggleTimeline: (row: TimelineRow) => void;
+  onDeleteTimeline: (row: TimelineRow) => void;
+  onAddManual: (input: { title: string; startTime: string; endTime: string }) => Promise<boolean>;
 }) {
   const completed = tasks.filter((task) => task.status === "done").length;
+  const tlItems = timeline ?? [];
+  const timelineMode = tlItems.length > 0;
+  const tlDone = tlItems.filter((x) => x.status === "completed").length;
+  const legacyOpenTasks = tasks.filter((task) => task.status !== "done");
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({ title: "", description: "", startDate: "", endDate: "", horizon: "" });
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  // Step4：手动安排表单
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualTitle, setManualTitle] = useState("");
+  const [manualStart, setManualStart] = useState("09:00");
+  const [manualEnd, setManualEnd] = useState("10:00");
+  const [manualBusy, setManualBusy] = useState(false);
+
+  /** 旧任务卡（Step 4 legacy 视图/折叠池复用；toggle 仍走 tasks 入账链路） */
+  const renderLegacyCard = (task: Task) => (
+    <div className={`schedule-card ${task.status === "done" ? "is-done" : task.status === "current" ? "is-current" : ""} ${task.acceptance ? "is-expandable" : ""}`} key={task.id} onClick={() => task.acceptance && setExpandedTaskId(expandedTaskId === task.id ? null : task.id)}>
+      <div className="schedule-time"><strong>{task.time || "今天"}</strong><span>{task.duration}</span></div>
+      <div className={`schedule-icon kind-${task.kind}`}>{renderTaskKindIcon(task.kind, 16)}</div>
+      <div className="schedule-copy">
+        <div className="task-title-line"><h3>{task.title}</h3><span className={`schedule-kind kind-${task.kind}`}>{taskKindLabel(task.kind)}</span>{task.status === "current" && <span className="now-pill">NOW</span>}</div>
+        <p>{task.subtitle}</p>
+        {expandedTaskId === task.id && task.acceptance ? <p className="task-acceptance"><span>完成标准</span>{task.acceptance}</p> : null}
+        <span className="schedule-reward">+{task.xp} XP · +{task.coin} coin</span>
+      </div>
+      <button className={`task-check ${task.status === "done" ? "checked" : ""}`} onClick={(event) => { event.stopPropagation(); onToggleTask(task.id); }} aria-label={`${task.status === "done" ? "撤销" : "完成"}：${task.title}`}>{task.status === "done" ? <Check size={15} strokeWidth={3} /> : <span />}</button>
+    </div>
+  );
+
+  async function submitManual() {
+    const title = manualTitle.trim();
+    if (!title || manualBusy || !manualEnd || manualEnd <= manualStart) return;
+    setManualBusy(true);
+    const ok = await onAddManual({ title, startTime: manualStart, endTime: manualEnd });
+    setManualBusy(false);
+    if (ok) {
+      setManualOpen(false);
+      setManualTitle("");
+    }
+  }
 
   function startCreate() {
     setEditingId(null);
@@ -1680,7 +1866,33 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
     {showForm && <section className="panel goal-form-panel"><div className="panel-heading"><div><span className="eyebrow">{editingId ? "EDIT GOAL" : "NEW GOAL"}</span><h2>{editingId ? "编辑目标" : "新建目标"}</h2></div><button className="quiet-button" onClick={() => { setShowForm(false); setEditingId(null); }}>收起</button></div><div className="goal-form"><input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="目标标题，例如：半年英语提升" aria-label="目标标题" /><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="描述（可选）：想达到什么结果" aria-label="目标描述" /><div className="goal-form-row"><input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} aria-label="开始日期" /><input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} aria-label="结束日期" /><input value={form.horizon} onChange={(e) => setForm({ ...form, horizon: e.target.value })} placeholder="周期，如 4 周目标" aria-label="周期" /></div><button className="primary-button" onClick={submitForm} disabled={!form.title.trim()}>{editingId ? "保存修改" : "创建目标"} <ArrowUpRight size={15} /></button></div></section>}
      <section className="panel agent-roadmap-panel"><div className="panel-heading"><div><span className="eyebrow">AI AGENT TRACK</span><h2>学习 Agent，并开发自己的 Agent</h2></div><Sparkles size={18} className="panel-icon" /></div><p className="panel-desc">这条路线把“学 AI”收敛成一个可以持续交付的小项目：先理解组成，再做最小闭环，最后用测验和真实任务验证。</p><div className="roadmap-stages"><div className="roadmap-stage"><span className="roadmap-number">01</span><div><strong>理解 Agent</strong><p>LLM、Prompt、工具调用、状态/记忆和评估。</p></div></div><div className="roadmap-stage"><span className="roadmap-number">02</span><div><strong>做最小闭环</strong><p>信息 → 决策 → 工具 → 结果，先解决一个具体问题。</p></div></div><div className="roadmap-stage"><span className="roadmap-number">03</span><div><strong>验证与迭代</strong><p>留下可验证证据，用理解题、日志和用户反馈校准。</p></div></div></div><div className="roadmap-action"><div><span>今日建议 · 45 分钟</span><strong>定义你的 Agent 问题与验收标准</strong></div><button className="primary-button" onClick={onAgentGoal}>加入今日计划 <ArrowUpRight size={15} /></button></div></section>
     <div className="plan-layout">
-      <section className="panel schedule-panel"><div className="panel-heading"><div><span className="eyebrow">TODAY TIMELINE</span><h2>今日时间轴</h2></div><span className="count-badge">{completed}/{tasks.length} 已完成</span></div><p className="panel-desc">把任务放进现实的时间里，完成感会更具体。</p><div className="schedule-list">{tasks.map((task) => <div className={`schedule-card ${task.status === "done" ? "is-done" : task.status === "current" ? "is-current" : ""} ${task.acceptance ? "is-expandable" : ""}`} key={task.id} onClick={() => task.acceptance && setExpandedTaskId(expandedTaskId === task.id ? null : task.id)}><div className="schedule-time"><strong>{task.time || "今天"}</strong><span>{task.duration}</span></div><div className={`schedule-icon kind-${task.kind}`}>{renderTaskKindIcon(task.kind, 16)}</div><div className="schedule-copy"><div className="task-title-line"><h3>{task.title}</h3><span className={`schedule-kind kind-${task.kind}`}>{taskKindLabel(task.kind)}</span>{task.status === "current" && <span className="now-pill">NOW</span>}</div><p>{task.subtitle}</p>{expandedTaskId === task.id && task.acceptance ? <p className="task-acceptance"><span>完成标准</span>{task.acceptance}</p> : null}<span className="schedule-reward">+{task.xp} XP · +{task.coin} coin</span></div><button className={`task-check ${task.status === "done" ? "checked" : ""}`} onClick={(event) => { event.stopPropagation(); onToggleTask(task.id); }} aria-label={`${task.status === "done" ? "撤销" : "完成"}：${task.title}`}>{task.status === "done" ? <Check size={15} strokeWidth={3} /> : <span />}</button></div>)}</div></section>
+      <section className="panel schedule-panel"><div className="panel-heading"><div><span className="eyebrow">TODAY TIMELINE</span><h2>今日时间轴</h2></div><span className="count-badge">{timelineMode ? `${tlDone}/${tlItems.length} 已完成` : `${completed}/${tasks.length} 已完成`}</span></div><p className="panel-desc">{timelineMode ? "AI 排程与手动事项都在这里；固定时间块只展示、不可占用。完成时段只记执行，不推进目标阶段。" : "还没有排程，先显示待办任务；给行动路线点「安排计划」后，这里会变成真正的时间轴。"}</p>
+        {timelineMode ? (
+          <>
+            <div className="schedule-list timeline-list">{tlItems.map((row) => <TimelineItemCard key={row.key} row={row} onToggle={onToggleTimeline} onDelete={onDeleteTimeline} />)}</div>
+            {legacyOpenTasks.length > 0 && (
+              <details className="timeline-legacy-pool"><summary>{legacyOpenTasks.length} 个待办旧任务（未排程，完成仍计入成长）</summary><div className="schedule-list">{legacyOpenTasks.map(renderLegacyCard)}</div></details>
+            )}
+            <div className="timeline-add">
+              {manualOpen ? (
+                <div className="timeline-manual-form">
+                  <input value={manualTitle} onChange={(e) => setManualTitle(e.target.value)} placeholder="手动事项，例如：下午买菜" aria-label="手动事项标题" />
+                  <input type="time" value={manualStart} onChange={(e) => setManualStart(e.target.value)} aria-label="开始时间" />
+                  <input type="time" value={manualEnd} onChange={(e) => setManualEnd(e.target.value)} aria-label="结束时间" />
+                  <button className="primary-button" disabled={!manualTitle.trim() || !manualEnd || manualEnd <= manualStart || manualBusy} onClick={() => void submitManual()}>{manualBusy ? "保存中…" : "加入安排"}</button>
+                  <button className="quiet-button" onClick={() => setManualOpen(false)}>取消</button>
+                </div>
+              ) : (
+                <button className="quiet-button timeline-add-btn" onClick={() => setManualOpen(true)}><Plus size={13} /> 手动安排</button>
+              )}
+            </div>
+          </>
+        ) : tasks.length > 0 ? (
+          <div className="schedule-list">{tasks.map(renderLegacyCard)}</div>
+        ) : (
+          <p className="timeline-empty-guide">今天还没有安排：给目标点「制定行动路线」→「安排计划」，这里会生成未来 14 天真正的时间轴；也可以先用「手动安排」随手加上今天的时段。</p>
+        )}
+      </section>
      <aside className="panel weekly-plan-panel"><div className="panel-heading"><div><span className="eyebrow">WEEKLY INTENT</span><h2>本周重点</h2></div><ListChecks size={18} className="panel-icon" /></div><div className="intent-list">{focusGoals && focusGoals.length > 0 ? focusGoals.map((goal, index) => <div className="intent-item" key={goal.id}><span className="intent-number">0{index + 1}</span><div><strong>{goal.title}</strong><p>{goal.description}</p></div></div>) : <div className="intent-item"><span className="intent-number">—</span><div><strong>还没有进行中的目标</strong><p>在计划里创建一个 4-12 周目标，本周重点会从这里出现。</p></div></div>}</div><div className="plan-note"><Sparkles size={15} /><span>建议：今天完成主任务后，不再新增新的计划。</span></div></aside>
     </div>
 
