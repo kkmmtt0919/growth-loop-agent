@@ -1,4 +1,5 @@
 import { getPool } from "./pool";
+import { hasGraphPath } from "../agent/core/pure";
 
 /**
  * Smart Planner 仓储层（docs/DESIGN_SMART_PLANNER_V1.md，migration 011_smart_planner.sql）。
@@ -236,20 +237,8 @@ export async function createActionsWithDepsTx(
     const byTitle = new Map<string, DbAction>();
     for (const { action } of created) byTitle.set(action.title.trim(), action);
 
-    // 依赖解析 + 环检测（图：actionId → 它依赖的 id 集合）
+    // 依赖解析 + 环检测（图：actionId → 它依赖的 id 集合；可达性用 pure 共享实现，eval 同源）
     const edges = new Map<string, Set<string>>();
-    const wouldCycle = (from: string, target: string): boolean => {
-      const stack = [from];
-      const visited = new Set<string>();
-      while (stack.length > 0) {
-        const cur = stack.pop()!;
-        if (cur === target) return true;
-        if (visited.has(cur)) continue;
-        visited.add(cur);
-        for (const next of edges.get(cur) ?? []) stack.push(next);
-      }
-      return false;
-    };
 
     const dependencies: ResolvedDependency[] = [];
     for (const { action, item } of created) {
@@ -258,7 +247,7 @@ export async function createActionsWithDepsTx(
         const dep = byTitle.get(depTitle.trim());
         if (!dep || dep.id === action.id) continue; // 引用不存在的标题 → 丢弃
         if (depIds.includes(dep.id)) continue;
-        if (wouldCycle(dep.id, action.id)) continue; // dep→…→action 已存在 → 加 action→dep 会成环 → 去边
+        if (hasGraphPath(edges, dep.id, action.id)) continue; // dep→…→action 已存在 → 加 action→dep 会成环 → 去边
         depIds.push(dep.id);
       }
       if (depIds.length === 0) continue;

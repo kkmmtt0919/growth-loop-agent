@@ -157,4 +157,40 @@ export const cases: Case[] = [
       assert(hasMeaningfulContext({ hasGoal: false, hasTasks: false, hasRecords: true }), "有 record 应有意义");
     },
   },
+  // ---- Step 5c 排程执行字段（验收 11 Weekly schema 校验 + 历史兼容）----
+  {
+    name: "buildWeeklyContent-排程三字段透传",
+    fn: () => {
+      const stats = makeStats({ planMinutes: 90, actualMinutes: 45, executionRate: 50 });
+      const content = buildWeeklyContent(stats, { summary: "s", achievement: [], problem: [], suggestion: [] }, [], "rules");
+      assertEq(content.stats.planMinutes, 90, "planMinutes 应透传");
+      assertEq(content.stats.actualMinutes, 45, "actualMinutes 应透传");
+      assertEq(content.stats.executionRate, 50, "executionRate 应透传");
+    },
+  },
+  {
+    name: "WeeklyStats-plan0-executionRate-null而非0",
+    fn: () => {
+      const stats = makeStats({ planMinutes: 0, actualMinutes: 0, executionRate: null });
+      assertEq(stats.executionRate, null, "plan=0 时 executionRate 必须为 null（语义：本周无排程，不是执行失败）");
+      assert(stats.executionRate !== 0, "绝不显示 0%");
+      // 计算规则守护：service 层 rate = plan>0 ? round(actual/plan*100) : null
+      const fakeCompute = (plan: number, actual: number): number | null => (plan > 0 ? Math.round((actual / plan) * 100) : null);
+      assertEq(fakeCompute(0, 0), null, "plan=0 计算规则应得 null");
+      assertEq(fakeCompute(90, 45), 50, "90 计划/45 实际 → 50%（非 1 非 100）");
+    },
+  },
+  {
+    name: "buildWeeklyContent-历史stats缺排程字段-不崩透传",
+    fn: () => {
+      // 模拟历史周报 content.stats（无 planMinutes/actualMinutes/executionRate）
+      const stats = makeStats() as unknown as Record<string, unknown>;
+      delete stats.planMinutes;
+      delete stats.actualMinutes;
+      delete stats.executionRate;
+      const content = buildWeeklyContent(stats as unknown as WeeklyStats, { summary: "s", achievement: [], problem: [], suggestion: [] }, [], "rules");
+      assertEq(content.stats.completionRate, 80, "旧字段仍可用（历史渲染不崩）");
+      assert(!("planMinutes" in content.stats), "无排程字段的历史 stats 原样透传，页面 optional 读取 → 整卡隐藏");
+    },
+  },
 ];

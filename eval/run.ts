@@ -9,6 +9,8 @@ import { cases as understandingCases } from "./cases/understanding";
 import { cases as decomposeCases } from "./cases/decompose";
 import { cases as eveningCases } from "./cases/evening";
 import { cases as weeklyCases } from "./cases/weekly";
+import { cases as actionCases } from "./cases/action";
+import { cases as plannerCases } from "./cases/planner";
 
 type Case = { name: string; fn: () => void };
 type Failure = { case: string; reason: string };
@@ -18,6 +20,8 @@ const suites: Array<{ name: string; cases: Case[] }> = [
   { name: "decompose", cases: decomposeCases },
   { name: "evening", cases: eveningCases },
   { name: "weekly", cases: weeklyCases },
+  { name: "action", cases: actionCases },
+  { name: "planner", cases: plannerCases },
 ];
 
 const startedAt = Date.now();

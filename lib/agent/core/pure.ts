@@ -585,3 +585,26 @@ export function validateActionSteps(
   });
   return { validSteps, issues };
 }
+
+/**
+ * 有向图可达性检测（Action 依赖环检测核心）。
+ * edges：actionId → 它直接依赖的前置 actionId 集合；返回 from 沿边能否到达 to。
+ * 新增依赖 a→dep 会成环 ⟺ dep 已能沿既有边到达 a（a→dep 会把路径闭合成环）→ 应去边。
+ * 纯函数：repo createActionsWithDepsTx 与 eval/action suite 共用同一实现（保证评测测的是产品逻辑）。
+ */
+export function hasGraphPath(
+  edges: ReadonlyMap<string, ReadonlySet<string>>,
+  from: string,
+  to: string,
+): boolean {
+  const stack = [from];
+  const visited = new Set<string>();
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    if (cur === to) return true;
+    if (visited.has(cur)) continue;
+    visited.add(cur);
+    for (const next of edges.get(cur) ?? []) stack.push(next);
+  }
+  return false;
+}
