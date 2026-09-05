@@ -27,6 +27,10 @@ type WeeklyContent = {
     streak: number;
     goalProgress: Array<{ goalId: string; title: string; status: string; progress: number; doneThisWeek: number }>;
     vsPrevWeek: { recordCount: number; minutes: number; doneTasks: number; completionRate: number };
+    // Step 5c 平行字段（optional：历史周报 content 无此字段时页面不解析失败、不显示执行卡）
+    planMinutes?: number;
+    actualMinutes?: number;
+    executionRate?: number | null;
   };
   summary: string;
   achievement: string[];
@@ -218,6 +222,26 @@ export default function WeeklyPage() {
               </div>
             </div>
           </section>
+
+          {/* 排程执行卡（Step 5c；仅新 schema 数据出现：planMinutes 字段存在才渲染）
+              分支：plan=0 → 「本周暂无 AI 排程」；否则计划/实际/执行率三项。
+              历史周报无 planMinutes → 整卡隐藏（历史兼容）。 */}
+          {c.stats.planMinutes !== undefined && (
+            <section className="panel weekly-exec">
+              <div className="panel-heading">
+                <div><span className="eyebrow">EXECUTION TRACK</span><h2>排程执行</h2></div>
+              </div>
+              {c.stats.planMinutes === 0 ? (
+                <p className="weekly-exec-empty">本周暂无 AI 排程：给行动路线点「安排计划」后，这里会显示本周计划与实际投入。</p>
+              ) : (
+                <div className="weekly-exec-grid">
+                  <div className="weekly-exec-item"><span>计划投入</span><strong>{c.stats.planMinutes}<small> 分钟</small></strong></div>
+                  <div className="weekly-exec-item"><span>实际投入</span><strong>{c.stats.actualMinutes ?? 0}<small> 分钟</small></strong></div>
+                  <div className="weekly-exec-item"><span>执行率</span><strong>{c.stats.executionRate == null ? "—" : `${c.stats.executionRate}%`}</strong></div>
+                </div>
+              )}
+            </section>
+          )}
 
           {/* AI 周总结卡 */}
           <section className="panel weekly-summary">
