@@ -155,6 +155,16 @@ type TimelineRow = {
   actualMinutes?: number;
 };
 
+/** Agent 运行记录（Step 7c 只读展示：GET /api/agent-runs；不含 input/output 明文） */
+type AgentRunRow = {
+  id: string;
+  agentType: "action-plan" | "planner" | "weekly" | "evening";
+  promptVersion: string;
+  latencyMs: number | null;
+  success: boolean;
+  createdAt: string;
+};
+
 type PlanFeasibility = {
   totalMinutes: number;
   remainingDays: number;
@@ -360,6 +370,8 @@ export default function Home() {
   const [evening, setEvening] = useState<EveningCardState>({ state: "loading" });
   const [dashboardStats, setDashboardStats] = useState<{ profile?: { streak?: number; nickname?: string; level?: number; xp?: number; nextLevelXp?: number; coin?: number }; todayTasks?: Task[]; todayRecords?: number } | null>(null);
   const [growthStats, setGrowthStats] = useState<{ weeklyMinutes?: Array<{ day: string; value: number; label: string }>; evidence?: { input: number; understanding: number; application: number }; activeDays?: number } | null>(null);
+  /** Agent 运行记录（Step 7c；ready 且切到成长 tab 时拉取；null=未加载 → 折叠区不渲染） */
+  const [agentRuns, setAgentRuns] = useState<AgentRunRow[] | null>(null);
   const [focusGoals, setFocusGoals] = useState<Goal[] | null>(null);
   // 计划页真实目标：初始用 demoSeed 回退（原型模式），ready 后由 GET /api/goals 覆盖
   const [goals, setGoals] = useState<PlanGoal[]>(demoSeed.goals);
@@ -501,6 +513,30 @@ export default function Home() {
       cancelled = true;
     };
   }, [authMode, authToken]);
+
+  // Step 7c：Agent 运行记录——ready 且当前在成长 tab 时拉取（每次切入刷新；null=未加载）
+  useEffect(() => {
+    if (authMode !== "ready" || !authToken || activeTab !== "成长") return;
+    let cancelled = false;
+    fetch("/api/agent-runs?limit=20", { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((r) => r.json())
+      .then((payload: { runs?: AgentRunRow[] }) => {
+        if (!cancelled && Array.isArray(payload.runs)) {
+          setAgentRuns(
+            payload.runs.map((run) => ({
+              ...run,
+              createdAt: run.createdAt,
+            })),
+          );
+        }
+      })
+      .catch(() => {
+        // 拉取失败不阻塞：折叠区保持空态
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authMode, authToken, activeTab]);
 
   // 晚报时间配置：ready 后从状态接口读取（REPORT_TIME），懒触发与提醒定时器统一用它
   useEffect(() => {
@@ -1577,7 +1613,7 @@ export default function Home() {
           ) : activeTab === "记录" ? (
             <RecordsPanel logs={logs} input={input} setInput={setInput} recordMinutes={recordMinutes} setRecordMinutes={setRecordMinutes} recordOutput={recordOutput} setRecordOutput={setRecordOutput} inputRef={quickLogRef} onSubmit={submitLog} onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)} onBackToToday={() => setActiveTab("今日")} />
           ) : (
-            <GrowthPanel growthStats={growthStats} goals={goals} onBackToToday={() => setActiveTab("今日")} />
+            <GrowthPanel growthStats={growthStats} goals={goals} agentRuns={agentRuns} onBackToToday={() => setActiveTab("今日")} />
           )}
         </div>
         <div className="mobile-nav">{tabs.map(({ label, icon: Icon }) => <button key={label} className={activeTab === label ? "active" : ""} onClick={() => setActiveTab(label)} aria-current={activeTab === label ? "page" : undefined}><Icon size={18} /><span>{label}</span></button>)}</div>
@@ -1736,7 +1772,7 @@ function TodayHome({ greeting, tasks, doneCount, input, setInput, recordMinutes,
       <div className="home-agenda-card">
         <div className="home-section-head"><div><span className="eyebrow">TODAY AGENDA</span><h2>{timelineMode ? "今日安排" : "今天要做的事"}</h2></div><span className="agenda-count">{timelineMode ? `${tlDone}/${tlItems.length} 已完成` : `${doneCount}/${tasks.length} 完成`}</span></div>
         <div className="home-agenda-list">{timelineMode ? tlItems.slice(0, 4).map((row) => <TimelineItemCard key={row.key} row={row} onToggle={onToggleTimeline} onDelete={onDeleteTimeline} onEditActual={onEditTimelineMinutes} />) : visibleTasks.map((task) => <HomeAgendaRow key={task.id} task={task} onToggle={onToggleTask} />)}</div>
-        {!timelineMode && tasks.length === 0 && <p className="agenda-empty">今天还没有安排：在「计划地图」给目标制定行动路线并安排计划，时间轴会从这里长出真实的下一步。</p>}
+        {!timelineMode && tasks.length === 0 && <p className="agenda-empty">今天还没有安排：在「计划地图」创建第一个目标，AI 会为你制定行动路线并排进今天，时间轴会从这里长出真实的下一步。</p>}
         <div className="home-agenda-footer"><button className="home-more-button" onClick={onOpenPlan}>查看完整计划 <ChevronRight size={15} /></button><button className="home-focus-link" onClick={onTogglePomodoro}><Timer size={14} />{pomodoroVisible ? "收起专注工具" : "需要节奏？打开 25 分钟"}</button></div>
         {pomodoroVisible && <div className="home-pomodoro-slot">{pomodoro}</div>}
       </div>
@@ -2027,7 +2063,19 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
           </article>
         );
       })}
-      {goals.length === 0 && <article className="goal-card goal-card-empty"><h3>还没有目标</h3><p>创建一个 4–12 周目标，计划地图会从这里长出真实的下一步。</p><button className="primary-button" onClick={startCreate}>创建第一个目标 <ArrowUpRight size={15} /></button></article>}
+      {goals.length === 0 && (
+        <article className="goal-card goal-card-empty onboarding-card">
+          <span className="onboarding-eyebrow">FIRST GOAL · 三步开始</span>
+          <h3>从一个目标开始</h3>
+          <p>写下 4–12 周后你想达到的样子，AI 会把它拆成今天就能推进的下一步。</p>
+          <ol className="onboarding-steps">
+            <li><span className="onboarding-step-num">1</span><div><strong>建一个目标</strong><em>例如「半年英语听力提升」</em></div></li>
+            <li><span className="onboarding-step-num">2</span><div><strong>AI 制定行动路线</strong><em>自动拆成有依赖顺序的阶段</em></div></li>
+            <li><span className="onboarding-step-num">3</span><div><strong>排进每一天</strong><em>按你的可用时间生成时间轴</em></div></li>
+          </ol>
+          <button className="primary-button" onClick={startCreate}>创建第一个目标 <ArrowUpRight size={15} /></button>
+        </article>
+      )}
     </div>
     {showForm && <section className="panel goal-form-panel"><div className="panel-heading"><div><span className="eyebrow">{editingId ? "EDIT GOAL" : "NEW GOAL"}</span><h2>{editingId ? "编辑目标" : "新建目标"}</h2></div><button className="quiet-button" onClick={() => { setShowForm(false); setEditingId(null); }}>收起</button></div><div className="goal-form"><input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="目标标题，例如：半年英语提升" aria-label="目标标题" /><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="描述（可选）：想达到什么结果" aria-label="目标描述" /><div className="goal-form-row"><input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} aria-label="开始日期" /><input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} aria-label="结束日期" /><input value={form.horizon} onChange={(e) => setForm({ ...form, horizon: e.target.value })} placeholder="周期，如 4 周目标" aria-label="周期" /></div><button className="primary-button" onClick={submitForm} disabled={!form.title.trim()}>{editingId ? "保存修改" : "创建目标"} <ArrowUpRight size={15} /></button></div></section>}
      <section className="panel agent-roadmap-panel"><div className="panel-heading"><div><span className="eyebrow">AI AGENT TRACK</span><h2>学习 Agent，并开发自己的 Agent</h2></div><Sparkles size={18} className="panel-icon" /></div><p className="panel-desc">这条路线把“学 AI”收敛成一个可以持续交付的小项目：先理解组成，再做最小闭环，最后用测验和真实任务验证。</p><div className="roadmap-stages"><div className="roadmap-stage"><span className="roadmap-number">01</span><div><strong>理解 Agent</strong><p>LLM、Prompt、工具调用、状态/记忆和评估。</p></div></div><div className="roadmap-stage"><span className="roadmap-number">02</span><div><strong>做最小闭环</strong><p>信息 → 决策 → 工具 → 结果，先解决一个具体问题。</p></div></div><div className="roadmap-stage"><span className="roadmap-number">03</span><div><strong>验证与迭代</strong><p>留下可验证证据，用理解题、日志和用户反馈校准。</p></div></div></div><div className="roadmap-action"><div><span>今日建议 · 45 分钟</span><strong>定义你的 Agent 问题与验收标准</strong></div><button className="primary-button" onClick={onAgentGoal}>加入今日计划 <ArrowUpRight size={15} /></button></div></section>
@@ -2314,7 +2362,7 @@ function LearningQuizCard({ quiz, answers, grade, busy, error, onAnswer, onGrade
 
 type GrowthStats = { weeklyMinutes?: Array<{ day: string; value: number; label: string }>; evidence?: { input: number; understanding: number; application: number }; activeDays?: number } | null;
 
-function GrowthPanel({ growthStats, goals, onBackToToday }: { growthStats: GrowthStats; goals: PlanGoal[]; onBackToToday: () => void }) {
+function GrowthPanel({ growthStats, goals, agentRuns, onBackToToday }: { growthStats: GrowthStats; goals: PlanGoal[]; agentRuns: AgentRunRow[] | null; onBackToToday: () => void }) {
   const weekly = growthStats?.weeklyMinutes ?? [];
   const totalMinutes = weekly.reduce((sum, bar) => sum + bar.value, 0);
   const applicationCount = growthStats?.evidence?.application ?? 0;
@@ -2344,6 +2392,30 @@ function GrowthPanel({ growthStats, goals, onBackToToday }: { growthStats: Growt
     <div className="growth-metrics"><article className="metric-card metric-coral"><span className="metric-label">有效行动日</span><strong>{streak}<small> 天</small></strong><p>连续记录节奏</p></article><article className="metric-card metric-navy"><span className="metric-label">本周投入</span><strong>{Math.floor(totalMinutes / 60)}<small>h</small> {totalMinutes % 60}<small>m</small></strong><p>7 天累计专注时长</p></article><article className="metric-card metric-sage"><span className="metric-label">掌握证据</span><strong>{applicationCount + understandingCount}<small> 条</small></strong><p>理解 + 应用形成证据</p></article><article className="metric-card metric-paper"><span className="metric-label">成长等级</span><strong>Lv.{String(currentLevel).padStart(2, "0")}</strong><p>{demoSeed.user.role} · 距离升级 {nextLevelXp} XP</p></article></div>
     <div className="growth-layout"><section className="panel growth-chart-panel"><div className="panel-heading"><div><span className="eyebrow">RHYTHM TREND</span><h2>近 7 天投入节奏</h2></div><span className="trend-chip"><ArrowUpRight size={13} /> 真实投入</span></div><div className="growth-chart">{weekly.map((bar, index) => <div className="growth-bar-column" key={bar.day}><span className="growth-bar-value">{bar.value > 0 ? bar.label : "—"}</span><div className="growth-bar-track"><span className={index === 3 ? "highlight" : ""} style={{ height: `${Math.min(100, bar.value)}%` }} /></div><span>{bar.day.slice(5)}</span></div>)}</div><div className="chart-caption"><span><i className="legend-dot" /> 有效专注时长</span><strong>按你的记录累计</strong></div></section><section className="panel evidence-panel"><div className="panel-heading"><div><span className="eyebrow">EVIDENCE MIX</span><h2>进步由什么组成</h2></div><BarChart3 size={18} className="panel-icon" /></div><div className="evidence-row"><div className="evidence-label"><span>行动记录</span><strong>{inputCount} 条</strong></div><div className="evidence-track"><span style={{ width: `${(inputCount / evidenceTotal) * 100}%` }} /></div></div><div className="evidence-row"><div className="evidence-label"><span>理解回应</span><strong>{understandingCount} 条</strong></div><div className="evidence-track"><span className="evidence-green" style={{ width: `${(understandingCount / evidenceTotal) * 100}%` }} /></div></div><div className="evidence-row"><div className="evidence-label"><span>实际应用</span><strong>{applicationCount} 条</strong></div><div className="evidence-track"><span className="evidence-gold" style={{ width: `${(applicationCount / evidenceTotal) * 100}%` }} /></div><p className="evidence-note"><Sparkles size={13} /> 理解来自测验 ≥60 分，应用来自完成任务。</p></div></section></div>
     <section className="panel goal-progress-panel"><div className="panel-heading"><div><span className="eyebrow">GOAL PROGRESS</span><h2>目标的真实进度</h2></div><span className="count-badge">只比较自己的基线</span></div><div className="growth-goal-list">{(goals.length > 0 ? goals : demoSeed.goals).map((goal) => <div className="growth-goal" key={goal.id}><div className="growth-goal-heading"><div><strong>{goal.title}</strong><span>{goal.description}</span></div><em>{goal.progress}%</em></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="growth-goal-footer"><span>{goal.horizon || "未设周期"}</span><span>{goal.status}</span></div></div>)}</div></section>
+    {agentRuns && (
+      <details className="panel agent-runs-panel">
+        <summary><span className="panel-heading-inline"><span className="eyebrow">AGENT TRACE</span><h2>AI 运行记录</h2></span><span className="agent-runs-count">{agentRuns.length} 次</span></summary>
+        {agentRuns.length === 0 ? (
+          <p className="agent-runs-empty">还没有 AI 运行记录：给目标「制定行动路线」或「安排计划」后，Agent 的每次调用都会记在这里（只读，不含输入输出内容）。</p>
+        ) : (
+          <div className="agent-runs-list">{agentRuns.map((run) => {
+            const typeLabel = { "action-plan": "行动路线", planner: "计划排程", weekly: "周报", evening: "晚间复盘" }[run.agentType] ?? run.agentType;
+            const time = new Date(run.createdAt);
+            const timeLabel = Number.isNaN(time.getTime()) ? run.createdAt : `${String(time.getMonth() + 1).padStart(2, "0")}-${String(time.getDate()).padStart(2, "0")} ${String(time.getHours()).padStart(2, "0")}:${String(time.getMinutes()).padStart(2, "0")}`;
+            return (
+              <div className="agent-run-row" key={run.id}>
+                <span className={`agent-run-dot ${run.success ? "ok" : "fail"}`} />
+                <span className="agent-run-type">{typeLabel}</span>
+                <span className="agent-run-ver">{run.promptVersion}</span>
+                <span className={`agent-run-status ${run.success ? "ok" : "fail"}`}>{run.success ? "成功" : "失败"}</span>
+                <span className="agent-run-latency">{run.latencyMs != null ? `${run.latencyMs}ms` : "—"}</span>
+                <span className="agent-run-time">{timeLabel}</span>
+              </div>
+            );
+          })}</div>
+        )}
+      </details>
+    )}
   </div>;
 }
 

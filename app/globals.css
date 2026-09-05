@@ -256,6 +256,16 @@ h1 { margin-top: 15px; color: var(--ink); font: 600 clamp(29px, 3.2vw, 40px)/1.1
 .goal-actions { display: inline-flex; align-items: center; gap: 8px; }
 .goal-card-empty { justify-content: center; align-items: flex-start; border-style: dashed; background: transparent; }
 .goal-card-empty h3 { margin-top: 0; }
+.onboarding-card { grid-column: 1 / -1; padding-top: 22px; padding-bottom: 20px; }
+.onboarding-eyebrow { color: #8e9891; font: 500 9px 'DM Mono', monospace; letter-spacing: .08em; }
+.onboarding-card h3 { margin-top: 8px; }
+.onboarding-card p { min-height: 0; }
+.onboarding-steps { list-style: none; margin: 10px 0 14px; padding: 0; display: grid; gap: 8px; }
+.onboarding-steps li { display: flex; align-items: flex-start; gap: 9px; }
+.onboarding-step-num { flex: none; width: 18px; height: 18px; border-radius: 50%; background: var(--sage); color: #fff; display: inline-flex; align-items: center; justify-content: center; font: 500 10px 'DM Mono', monospace; margin-top: 1px; }
+.onboarding-steps strong { display: block; color: var(--ink); font: 500 12px/1.4 'Noto Serif SC', serif; }
+.onboarding-steps em { display: block; color: var(--ink-soft); font-style: normal; font-size: 10px; line-height: 1.5; margin-top: 1px; }
+.onboarding-card .primary-button { align-self: flex-start; }
 .goal-form-panel { margin-top: 14px; }
 .goal-form { display: grid; gap: 9px; margin-top: 13px; }
 .goal-form input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--white); color: var(--ink); font-size: 12px; }
@@ -371,6 +381,29 @@ h1 { margin-top: 15px; color: var(--ink); font: 600 clamp(29px, 3.2vw, 40px)/1.1
 .growth-goal-heading span { color: var(--ink-soft); font-size: 9px; line-height: 1.5; margin-top: 5px; }
 .growth-goal-heading em { color: var(--coral); font: 600 17px 'DM Mono', monospace; font-style: normal; }
 .growth-goal-footer { display: flex; justify-content: space-between; color: #9ba39d; font: 8px 'DM Mono', monospace; margin-top: 8px; }
+
+/* Step 7c：Agent 运行记录（成长页底部只读折叠，默认收起；不含 input/output 明文） */
+.agent-runs-panel { margin-top: 14px; }
+.agent-runs-panel summary { display: flex; align-items: center; justify-content: space-between; cursor: pointer; list-style: none; }
+.agent-runs-panel summary::-webkit-details-marker { display: none; }
+.agent-runs-panel summary::after { content: "▾"; color: #a2a9a2; font-size: 10px; transition: transform .15s ease; }
+.agent-runs-panel[open] summary::after { transform: rotate(180deg); }
+.panel-heading-inline { display: inline-flex; align-items: center; gap: 8px; }
+.panel-heading-inline h2 { margin: 0; }
+.agent-runs-count { color: #8e9891; font: 9px 'DM Mono', monospace; }
+.agent-runs-empty { color: #a2a9a2; font-size: 10px; line-height: 1.6; margin: 12px 0 2px; }
+.agent-runs-list { display: grid; gap: 6px; margin-top: 13px; }
+.agent-run-row { display: flex; align-items: center; gap: 9px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,253,248,.6); }
+.agent-run-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.agent-run-dot.ok { background: var(--sage); }
+.agent-run-dot.fail { background: var(--coral); }
+.agent-run-type { color: var(--ink); font: 500 10px 'Noto Serif SC', serif; min-width: 52px; }
+.agent-run-ver { color: #9ba39d; font: 8px 'DM Mono', monospace; }
+.agent-run-status { font-size: 9px; margin-left: auto; }
+.agent-run-status.ok { color: #639176; }
+.agent-run-status.fail { color: #c0716a; }
+.agent-run-latency { color: #9ba39d; font: 8px 'DM Mono', monospace; min-width: 52px; text-align: right; }
+.agent-run-time { color: #a2a9a2; font: 8px 'DM Mono', monospace; min-width: 82px; text-align: right; }
 .toast { position: fixed; right: 27px; bottom: 22px; display: flex; align-items: center; gap: 8px; padding: 10px 13px; border: 1px solid #ded8cc; border-radius: 7px; color: var(--ink-soft); background: rgba(255,253,248,.94); box-shadow: 0 11px 28px rgba(56,49,40,.1); font-size: 10px; backdrop-filter: blur(9px); }
 .toast-status { width: 6px; height: 6px; border-radius: 50%; background: #75a489; }
 

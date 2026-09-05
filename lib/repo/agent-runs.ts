@@ -39,3 +39,33 @@ export async function insertAgentRun(input: InsertAgentRunInput): Promise<void> 
     ],
   );
 }
+
+/** 只读列表行：刻意不含 input_context/output_json/error_message（隐私与体积，见 015 口径） */
+export type AgentRunListRow = {
+  id: string;
+  agentType: AgentRunTraceType;
+  promptVersion: string;
+  latencyMs: number | null;
+  success: boolean;
+  createdAt: Date;
+};
+
+/** 最近 N 条 Agent 调用（用户隔离，created_at 倒序）。只读，不改动任何行。 */
+export async function listAgentRuns(userId: string, limit: number): Promise<AgentRunListRow[]> {
+  const { rows } = await getPool().query(
+    `select id, agent_type, prompt_version, latency_ms, success, created_at
+       from public.agent_runs
+      where user_id = $1
+      order by created_at desc
+      limit $2`,
+    [userId, limit],
+  );
+  return rows.map((r) => ({
+    id: r.id as string,
+    agentType: r.agent_type as AgentRunTraceType,
+    promptVersion: r.prompt_version as string,
+    latencyMs: r.latency_ms == null ? null : Number(r.latency_ms),
+    success: r.success as boolean,
+    createdAt: r.created_at as Date,
+  }));
+}
