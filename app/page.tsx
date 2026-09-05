@@ -114,6 +114,8 @@ type ActionRow = {
   sortOrder: number;
   createdAt: string;
   dependsOnTitles: string[];
+  /** 累计实际投入（execution_records 汇总；Step 5b 展示「投入 x/预计 y」） */
+  spentMinutes?: number;
 };
 
 /** 行动阶段按 id 去重合并（新生成结果并入已有列表） */
@@ -148,6 +150,9 @@ type TimelineRow = {
   actionId?: string | null;
   goalId?: string | null;
   source?: "action" | "manual";
+  /** 已完成项的执行记录（Step 5b 行内编辑实际分钟） */
+  executionId?: string;
+  actualMinutes?: number;
 };
 
 type PlanFeasibility = {
@@ -972,6 +977,29 @@ export default function Home() {
     }
   }
 
+  /** 行内编辑实际投入分钟（只改 execution_records，不影响 schedule 时长/状态） */
+  async function updateExecutionMinutes(row: TimelineRow, minutes: number): Promise<boolean> {
+    if (!row.executionId || authMode !== "ready") return false;
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+      notify("实际投入应为 1-1440 的整数");
+      return false;
+    }
+    try {
+      const res = await fetch(`/api/executions/${row.executionId}`, {
+        method: "PATCH",
+        headers: apiHeaders(),
+        body: JSON.stringify({ actualMinutes: minutes }),
+      });
+      if (!res.ok) throw new Error("execution update failed");
+      setTimeline((cur) => (cur ? cur.map((i) => (i.key === row.key ? { ...i, actualMinutes: minutes } : i)) : cur));
+      notify(`实际投入已更新为 ${minutes} 分钟`);
+      return true;
+    } catch {
+      notify("实际分钟更新失败，请重试");
+      return false;
+    }
+  }
+
   // Step4：进入执行视图（今日/计划 tab）且已登录 → 刷新今日时间轴（accept/reset 后由各自 handler 主动刷新）
   useEffect(() => {
     if (authMode !== "ready" || !authToken) return;
@@ -1440,9 +1468,10 @@ export default function Home() {
               timeline={timeline}
               onToggleTimeline={(row) => void toggleTimelineRow(row)}
               onDeleteTimeline={(row) => void deleteTimelineRow(row)}
+              onEditTimelineMinutes={(row, minutes) => updateExecutionMinutes(row, minutes)}
             />
           ) : activeTab === "计划" ? (
-            <PlanPanel tasks={tasks} goals={goals} focusGoals={focusGoals} onToggleTask={toggleTask} onDecomposeGoal={decomposeGoal} onGenerateRoute={generateRoute} decomposingGoalId={decomposingGoalId} generatingGoalId={generatingGoalId} onToggleAction={toggleActionStatus} onOpenPlan={openPlanner} onResetPlan={(goal) => resetGoalPlanNow(goal, false)} availRows={availRows} onSaveAvailability={saveAvailabilityRows} onCreateGoal={createGoal} onUpdateGoal={updateGoal} onDeleteGoal={deleteGoal} onAgentGoal={handleAgentGoal} onBackToToday={() => setActiveTab("今日")} timeline={timeline} onToggleTimeline={(row) => void toggleTimelineRow(row)} onDeleteTimeline={(row) => void deleteTimelineRow(row)} onAddManual={(input) => addManualSchedule(input)} />
+            <PlanPanel tasks={tasks} goals={goals} focusGoals={focusGoals} onToggleTask={toggleTask} onDecomposeGoal={decomposeGoal} onGenerateRoute={generateRoute} decomposingGoalId={decomposingGoalId} generatingGoalId={generatingGoalId} onToggleAction={toggleActionStatus} onOpenPlan={openPlanner} onResetPlan={(goal) => resetGoalPlanNow(goal, false)} availRows={availRows} onSaveAvailability={saveAvailabilityRows} onCreateGoal={createGoal} onUpdateGoal={updateGoal} onDeleteGoal={deleteGoal} onAgentGoal={handleAgentGoal} onBackToToday={() => setActiveTab("今日")} timeline={timeline} onToggleTimeline={(row) => void toggleTimelineRow(row)} onDeleteTimeline={(row) => void deleteTimelineRow(row)} onEditTimelineMinutes={(row, minutes) => updateExecutionMinutes(row, minutes)} onAddManual={(input) => addManualSchedule(input)} />
           ) : activeTab === "记录" ? (
             <RecordsPanel logs={logs} input={input} setInput={setInput} recordMinutes={recordMinutes} setRecordMinutes={setRecordMinutes} recordOutput={recordOutput} setRecordOutput={setRecordOutput} inputRef={quickLogRef} onSubmit={submitLog} onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)} onBackToToday={() => setActiveTab("今日")} />
           ) : (
@@ -1563,9 +1592,10 @@ type TodayHomeProps = {
   timeline: TimelineRow[] | null;
   onToggleTimeline: (row: TimelineRow) => void;
   onDeleteTimeline: (row: TimelineRow) => void;
+  onEditTimelineMinutes?: (row: TimelineRow, minutes: number) => Promise<boolean>;
 };
 
-function TodayHome({ greeting, tasks, doneCount, input, setInput, recordMinutes, setRecordMinutes, recordOutput, setRecordOutput, quickLogRef, onSubmit, onToggleTask, onOpenPlan, assistantReply, isAgentBusy, reviewEnabled, onToggleReview, onStartReview, evening, eveningTime, pomodoroVisible, onTogglePomodoro, pomodoro, timeline, onToggleTimeline, onDeleteTimeline }: TodayHomeProps) {
+function TodayHome({ greeting, tasks, doneCount, input, setInput, recordMinutes, setRecordMinutes, recordOutput, setRecordOutput, quickLogRef, onSubmit, onToggleTask, onOpenPlan, assistantReply, isAgentBusy, reviewEnabled, onToggleReview, onStartReview, evening, eveningTime, pomodoroVisible, onTogglePomodoro, pomodoro, timeline, onToggleTimeline, onDeleteTimeline, onEditTimelineMinutes }: TodayHomeProps) {
   const visibleTasks = tasks.slice(0, 4);
   const tlItems = timeline ?? [];
   const timelineMode = tlItems.length > 0;
@@ -1602,7 +1632,7 @@ function TodayHome({ greeting, tasks, doneCount, input, setInput, recordMinutes,
     <section className="home-agenda-grid">
       <div className="home-agenda-card">
         <div className="home-section-head"><div><span className="eyebrow">TODAY AGENDA</span><h2>{timelineMode ? "今日安排" : "今天要做的事"}</h2></div><span className="agenda-count">{timelineMode ? `${tlDone}/${tlItems.length} 已完成` : `${doneCount}/${tasks.length} 完成`}</span></div>
-        <div className="home-agenda-list">{timelineMode ? tlItems.slice(0, 4).map((row) => <TimelineItemCard key={row.key} row={row} onToggle={onToggleTimeline} onDelete={onDeleteTimeline} />) : visibleTasks.map((task) => <HomeAgendaRow key={task.id} task={task} onToggle={onToggleTask} />)}</div>
+        <div className="home-agenda-list">{timelineMode ? tlItems.slice(0, 4).map((row) => <TimelineItemCard key={row.key} row={row} onToggle={onToggleTimeline} onDelete={onDeleteTimeline} onEditActual={onEditTimelineMinutes} />) : visibleTasks.map((task) => <HomeAgendaRow key={task.id} task={task} onToggle={onToggleTask} />)}</div>
         {!timelineMode && tasks.length === 0 && <p className="agenda-empty">今天还没有安排：在「计划地图」给目标制定行动路线并安排计划，时间轴会从这里长出真实的下一步。</p>}
         <div className="home-agenda-footer"><button className="home-more-button" onClick={onOpenPlan}>查看完整计划 <ChevronRight size={15} /></button><button className="home-focus-link" onClick={onTogglePomodoro}><Timer size={14} />{pomodoroVisible ? "收起专注工具" : "需要节奏？打开 25 分钟"}</button></div>
         {pomodoroVisible && <div className="home-pomodoro-slot">{pomodoro}</div>}
@@ -1640,8 +1670,20 @@ function EveningStructured({ content }: { content: Record<string, unknown> }) {
 }
 
 /** 时间轴行（Step 4）：action/manual/fixed 统一卡片；fixed 纯展示，manual 带删除钮 */
-function TimelineItemCard({ row, onToggle, onDelete }: { row: TimelineRow; onToggle: (row: TimelineRow) => void; onDelete: (row: TimelineRow) => void }) {
+function TimelineItemCard({ row, onToggle, onDelete, onEditActual }: { row: TimelineRow; onToggle: (row: TimelineRow) => void; onDelete: (row: TimelineRow) => void; onEditActual?: (row: TimelineRow, minutes: number) => Promise<boolean> | boolean }) {
   const interactive = row.type !== "fixed" && !!row.scheduleId;
+  const canEdit = row.status === "completed" && !!row.executionId && !!onEditActual;
+  const [editingActual, setEditingActual] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const draftValid = Number.isInteger(Number(draft)) && Number(draft) >= 1 && Number(draft) <= 1440;
+  async function saveActual() {
+    if (!draftValid || saving || !onEditActual) return;
+    setSaving(true);
+    const saved = await onEditActual(row, Number(draft));
+    setSaving(false);
+    if (saved) setEditingActual(false);
+  }
   return (
     <div className={`timeline-item type-${row.type} ${row.status === "completed" ? "is-done" : ""}`}>
       <div className="timeline-time"><strong>{row.startTime}</strong><span>{row.endTime}</span></div>
@@ -1650,6 +1692,19 @@ function TimelineItemCard({ row, onToggle, onDelete }: { row: TimelineRow; onTog
           <h3>{row.title}</h3>
           <span className={`timeline-badge src-${row.type}`}>{row.type === "action" ? "AI安排" : row.type === "manual" ? "手动" : "固定时间"}</span>
         </div>
+        {canEdit && (
+          <div className="timeline-actual">
+            {editingActual ? (
+              <>
+                <input type="number" min={1} max={1440} value={draft} onChange={(e) => setDraft(e.target.value)} aria-label="实际投入分钟" />
+                <button className="timeline-actual-save" disabled={!draftValid || saving} onClick={() => void saveActual()}>{saving ? "保存中" : "保存"}</button>
+                <button className="timeline-actual-cancel" onClick={() => setEditingActual(false)}>取消</button>
+              </>
+            ) : (
+              <span className="timeline-actual-note">实际投入 {row.actualMinutes ?? "—"} 分钟<button className="timeline-actual-edit" onClick={() => { setDraft(String(row.actualMinutes ?? "")); setEditingActual(true); }}>修改</button></span>
+            )}
+          </div>
+        )}
       </div>
       {interactive && (
         <button
@@ -1706,7 +1761,7 @@ function WorkspaceHeader({ eyebrow, title, description, onBackToToday, action }:
   return <div className="workspace-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><div className="workspace-heading-actions">{action}{onBackToToday ? <button className="quiet-button" onClick={onBackToToday}><LayoutDashboard size={15} /> 回到今日</button> : null}</div></div>;
 }
 
-function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpdateGoal, onDeleteGoal, onAgentGoal, onDecomposeGoal, onGenerateRoute, decomposingGoalId, generatingGoalId, onToggleAction, onOpenPlan, onResetPlan, availRows, onSaveAvailability, onBackToToday, timeline, onToggleTimeline, onDeleteTimeline, onAddManual }: {
+function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpdateGoal, onDeleteGoal, onAgentGoal, onDecomposeGoal, onGenerateRoute, decomposingGoalId, generatingGoalId, onToggleAction, onOpenPlan, onResetPlan, availRows, onSaveAvailability, onBackToToday, timeline, onToggleTimeline, onDeleteTimeline, onEditTimelineMinutes, onAddManual }: {
   tasks: Task[];
   goals: PlanGoal[];
   focusGoals: Goal[] | null;
@@ -1728,6 +1783,7 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
   timeline: TimelineRow[] | null;
   onToggleTimeline: (row: TimelineRow) => void;
   onDeleteTimeline: (row: TimelineRow) => void;
+  onEditTimelineMinutes?: (row: TimelineRow, minutes: number) => Promise<boolean>;
   onAddManual: (input: { title: string; startTime: string; endTime: string }) => Promise<boolean>;
 }) {
   const completed = tasks.filter((task) => task.status === "done").length;
@@ -1815,16 +1871,20 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
             <div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div>
             {hasRoute && (
               <div className="goal-actions-list">
-                {goalActions.map((action) => (
-                  <div className={`goal-action-row ${action.status === "completed" ? "is-done" : ""}`} key={action.id}>
-                    <span className={`goal-action-status status-${action.status}`}>{action.status === "completed" ? <Check size={13} strokeWidth={3} /> : action.status === "planned" ? <span className="goal-action-clock" /> : <span className="goal-action-dot" />}</span>
-                    <div className="goal-action-copy">
-                      <div className="goal-action-title-line"><strong>{action.title}</strong><span className="goal-action-est">{formatActionMinutes(action.estimatedMinutes)}</span></div>
-                      {action.dependsOnTitles.length > 0 && <span className="goal-action-depends">依赖：{action.dependsOnTitles.join("、")}</span>}
+                {goalActions.map((action) => {
+                  const spent = action.spentMinutes ?? 0;
+                  const reached = action.status !== "completed" && spent >= action.estimatedMinutes;
+                  return (
+                    <div className={`goal-action-row ${action.status === "completed" ? "is-done" : ""}`} key={action.id}>
+                      <span className={`goal-action-status status-${action.status}`}>{action.status === "completed" ? <Check size={13} strokeWidth={3} /> : action.status === "planned" ? <span className="goal-action-clock" /> : <span className="goal-action-dot" />}</span>
+                      <div className="goal-action-copy">
+                        <div className="goal-action-title-line"><strong>{action.title}</strong>{reached && <span className="goal-action-reached">已达预计投入</span>}<span className="goal-action-est">{spent > 0 ? `投入 ${formatActionMinutes(spent)} / 预计 ${formatActionMinutes(action.estimatedMinutes)}` : `预计 ${formatActionMinutes(action.estimatedMinutes)}`}</span></div>
+                        {action.dependsOnTitles.length > 0 && <span className="goal-action-depends">依赖：{action.dependsOnTitles.join("、")}</span>}
+                      </div>
+                      <button className="goal-action-toggle" disabled={action.status === "planned"} onClick={() => onToggleAction(action)}>{action.status === "completed" ? "撤销完成" : action.status === "planned" ? "已安排" : reached ? "确认完成" : "标记完成"}</button>
                     </div>
-                    <button className="goal-action-toggle" disabled={action.status === "planned"} onClick={() => onToggleAction(action)}>{action.status === "completed" ? "撤销完成" : action.status === "planned" ? "已安排" : "标记完成"}</button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
             {goalActions.length > 0 && (() => {
@@ -1869,7 +1929,7 @@ function PlanPanel({ tasks, goals, focusGoals, onToggleTask, onCreateGoal, onUpd
       <section className="panel schedule-panel"><div className="panel-heading"><div><span className="eyebrow">TODAY TIMELINE</span><h2>今日时间轴</h2></div><span className="count-badge">{timelineMode ? `${tlDone}/${tlItems.length} 已完成` : `${completed}/${tasks.length} 已完成`}</span></div><p className="panel-desc">{timelineMode ? "AI 排程与手动事项都在这里；固定时间块只展示、不可占用。完成时段只记执行，不推进目标阶段。" : "还没有排程，先显示待办任务；给行动路线点「安排计划」后，这里会变成真正的时间轴。"}</p>
         {timelineMode ? (
           <>
-            <div className="schedule-list timeline-list">{tlItems.map((row) => <TimelineItemCard key={row.key} row={row} onToggle={onToggleTimeline} onDelete={onDeleteTimeline} />)}</div>
+            <div className="schedule-list timeline-list">{tlItems.map((row) => <TimelineItemCard key={row.key} row={row} onToggle={onToggleTimeline} onDelete={onDeleteTimeline} onEditActual={onEditTimelineMinutes} />)}</div>
             {legacyOpenTasks.length > 0 && (
               <details className="timeline-legacy-pool"><summary>{legacyOpenTasks.length} 个待办旧任务（未排程，完成仍计入成长）</summary><div className="schedule-list">{legacyOpenTasks.map(renderLegacyCard)}</div></details>
             )}

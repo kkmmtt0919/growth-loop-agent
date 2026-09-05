@@ -1,5 +1,6 @@
 import { countTasksByGoal, createGoal, deleteGoal, getGoal, listGoals, updateGoal } from "@/lib/repo/goals";
 import { listActionsByGoal, listDependenciesByGoal } from "@/lib/repo/planner";
+import { sumExecutionMinutesByActions } from "@/lib/repo/execution";
 import type { DbGoal } from "@/lib/repo/types";
 import { buildActionViews, type ActionView } from "./action-decompose";
 import { ServiceError } from "./errors";
@@ -51,14 +52,20 @@ function assertValidDates(startDate?: string | null, endDate?: string | null) {
 
 /** 派生视图：tasks 计数 + 行动路线内嵌 + progress 规则（D3）。per-goal 查询（MVP 目标量级小，接受 N 次） */
 async function deriveView(goal: DbGoal): Promise<GoalView> {
-  const [t, actions, deps] = await Promise.all([
+  const actions = await listActionsByGoal(goal.user_id, goal.id);
+  const [t, deps, spentRows] = await Promise.all([
     countTasksByGoal(goal.user_id, goal.id),
-    listActionsByGoal(goal.user_id, goal.id),
     listDependenciesByGoal(goal.user_id, goal.id),
+    sumExecutionMinutesByActions(
+      goal.user_id,
+      actions.map((a) => a.id),
+    ),
   ]);
+  const spentMap = new Map(spentRows.map((r) => [r.action_id, r.minutes]));
   const views = buildActionViews(
     actions,
     deps.map((d) => ({ actionId: d.action_id, dependsOnActionId: d.depends_on })),
+    spentMap,
   );
   const actionDone = views.filter((v) => v.status === "completed").length;
   let progress: number;

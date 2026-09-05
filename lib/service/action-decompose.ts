@@ -40,6 +40,8 @@ export type ActionView = {
   createdAt: string;
   /** 依赖的前置阶段标题（展示徽标用） */
   dependsOnTitles: string[];
+  /** 累计实际投入（execution_records 汇总；无执行 0）——Action 投入唯一统计来源（STEP5 §5） */
+  spentMinutes: number;
 };
 
 export type ActionRouteResult = {
@@ -104,10 +106,13 @@ export type ResolvedDependencyLike = { actionId: string; dependsOnActionId: stri
 /**
  * 组装 ActionView（DbAction[] + 依赖 → 前端视图）。
  * generate（新生成）/ list（回显）/ goals.deriveView（卡片内嵌）共用，避免三处各自拼装。
+ * spentByAction：execution_records 累计投入（actionId → 分钟）；不传则全部 0。
+ *   —— Action 实际投入的唯一统计来源是 execution_records（records 仅成长事件补充，勿混用）。
  */
 export function buildActionViews(
   actions: DbAction[],
   deps: ResolvedDependencyLike[],
+  spentByAction?: ReadonlyMap<string, number>,
 ): ActionView[] {
   const titleById = new Map(actions.map((a) => [a.id, a.title]));
   const depsByAction = new Map<string, string[]>();
@@ -130,6 +135,7 @@ export function buildActionViews(
     sortOrder: a.sort_order,
     createdAt: a.created_at,
     dependsOnTitles: depsByAction.get(a.id) ?? [],
+    spentMinutes: spentByAction?.get(a.id) ?? 0,
   }));
 }
 

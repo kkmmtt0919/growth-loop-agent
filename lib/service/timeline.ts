@@ -9,6 +9,7 @@ import {
   type DbSchedule,
 } from "@/lib/repo/planner";
 import { dateToDbWeekday } from "./planner-scheduler";
+import { listExecutionsBySchedules } from "@/lib/repo/execution";
 import { todayInShanghai } from "./time";
 import { ServiceError } from "./errors";
 
@@ -38,6 +39,9 @@ export type TimelineItem = {
   actionId?: string | null;
   goalId?: string | null;
   source?: "action" | "manual";
+  /** 已完成 action/manual 回显其执行记录（行内编辑实际分钟用） */
+  executionId?: string;
+  actualMinutes?: number;
 };
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -73,6 +77,20 @@ export async function buildTodayTimeline(userId: string): Promise<{ date: string
   ]);
 
   const items: TimelineItem[] = scheds.map(mapSchedule);
+
+  // 回显执行记录（仅已完成 action/manual；行内编辑实际分钟用）
+  const execs = await listExecutionsBySchedules(
+    userId,
+    scheds.filter((s) => s.status === "completed").map((s) => s.id),
+  );
+  const execBySchedule = new Map(execs.map((e) => [e.schedule_id, e]));
+  for (const item of items) {
+    const exec = item.scheduleId ? execBySchedule.get(item.scheduleId) : undefined;
+    if (exec) {
+      item.executionId = exec.id;
+      item.actualMinutes = exec.actual_minutes;
+    }
+  }
 
   // fixed：仅 title≠'' 且 weekday 命中今天（title='' = 可排空档，不展示）
   const weekday = dateToDbWeekday(today);

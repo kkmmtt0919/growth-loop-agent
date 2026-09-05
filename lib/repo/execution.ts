@@ -60,3 +60,34 @@ export async function sumExecutionMinutesByActions(
   );
   return rows.map((r) => ({ action_id: r.action_id, minutes: Number(r.minutes) }));
 }
+
+/** 若干排程的执行记录（buildTodayTimeline 回显 actualMinutes 用） */
+export async function listExecutionsBySchedules(
+  userId: string,
+  scheduleIds: string[],
+): Promise<DbExecution[]> {
+  if (scheduleIds.length === 0) return [];
+  const { rows } = await getPool().query<DbExecution>(
+    `select ${EXECUTION_COLUMNS}
+     from public.execution_records
+     where user_id = $1 and schedule_id = any($2::uuid[])
+     order by completed_at asc`,
+    [userId, scheduleIds],
+  );
+  return rows;
+}
+
+/** 修改执行记录实际分钟（行内编辑；只动 execution，绝不影响 schedule 时长/状态） */
+export async function updateExecutionActual(
+  userId: string,
+  executionId: string,
+  actualMinutes: number,
+): Promise<DbExecution | null> {
+  const { rows } = await getPool().query<DbExecution>(
+    `update public.execution_records set actual_minutes = $3
+     where id = $1 and user_id = $2
+     returning ${EXECUTION_COLUMNS}`,
+    [executionId, userId, actualMinutes],
+  );
+  return rows[0] ?? null;
+}

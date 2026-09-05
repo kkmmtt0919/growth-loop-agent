@@ -57,8 +57,17 @@ try {
   const gv = ((await call("GET", "/api/goals")).data.goals ?? []).find((x) => x.id === goalId);
   const actionRow = (gv?.actions ?? []).find((a) => a.id === target.actionId);
   ok("E2 schedule completed → action 仍 planned（隔离）", actionRow?.status === "planned");
+  // 5b：完成项回显 execution + 修改实际分钟（不改 schedule）
+  const doneItem = (await getToday()).find((i) => i.key === `s:${target.scheduleId}`);
+  ok("5b-1 completed item 回显 execution 信息", !!doneItem?.executionId && typeof doneItem?.actualMinutes === "number");
+  const ex = await call("PATCH", `/api/executions/${doneItem.executionId}`, { actualMinutes: 30 });
+  ok("5b-2 PATCH execution actual=30", ex.data.execution?.actual_minutes === 30);
+  const doneItem2 = (await getToday()).find((i) => i.key === `s:${target.scheduleId}`);
+  ok("5b-3 GET today 反映新 actual（schedule 时长不动）", doneItem2?.actualMinutes === 30 && doneItem2?.startTime === doneItem?.startTime && doneItem2?.endTime === doneItem?.endTime);
   const undo = await call("PATCH", `/api/schedules/${target.scheduleId}`, { status: "planned" });
   ok("F 撤销完成 → planned", undo.data.schedule?.status === "planned");
+  const undoneItem = (await getToday()).find((i) => i.key === `s:${target.scheduleId}`);
+  ok("F2 撤销后执行信息不显示（事实撤回）", undoneItem?.status === "planned" && !undoneItem?.executionId);
 
   // D：改 availability 增加今天固定块（title≠''）→ fixed 显示；旧 schedule 不移动
   const wd = weekdayToday();
