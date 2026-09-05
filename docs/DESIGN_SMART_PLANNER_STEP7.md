@@ -203,7 +203,27 @@ v1.0 release tag（release review：完整度/简历描述/Demo 流程/技术亮
 - **实测（Docker daemon 可用）**：`docker-compose build` 成功；db 容器 healthy；**容器内 setup-db 空库全量 15/15 applied + 幂等重跑「已全部应用」**；app 镜像以 3100 端口起容器 → 首页 200 → **register 200 / me 200(xp25) / create goal 201**（验收 22/23 通过）。本机 3000 被 dev server 占用故容器映射 3100 验证；测试容器与 compose 已 down 清理。
 - **未验证项**：`docker compose up -d`（映射 3000）整体体验留待无端口冲突环境/README 步骤核验；验收 21（clone 即跑）随 7d README 落地后由用户或新环境核。
 
+### 7b 首次体验引导 ✅（2026-09-05 交付）
+
+- **落点核对（T80）**：空态渲染共 2 处——计划页 PlanPanel `page.tsx` L2030 `goal-card-empty`（仅 `goals.length===0` 时）与今日页 TodayHome L1739 `agenda-empty`；demo 模式 `goals` 恒为 `demoSeed.goals`（2 个 seed 目标，demo-data.ts L97-124）→ **demo 永不触发空态**；ready 新账号 GET /api/goals 返回 [] → 触发。判定条件 = `goals.length === 0`，无需新增"首次登录"标记；demo/auth 共用 PlanPanel/TodayHome，改一处两模式受益，demo 因 seed 天然免疫。
+- **实现（用户确认"计划页为主 + 今日页加文案"）**：
+  - 计划页空态替换为三步引导卡（`goal-card-empty onboarding-card`）：「从一个目标开始」+ 三步列表（①建一个目标 → ②AI 制定行动路线 → ③排进每一天）+ 保留 `startCreate` 按钮；`grid-column: 1/-1` 跨双列全宽。
+  - 今日页 `agenda-empty` 文案补"创建第一个目标"方向提示。
+  - CSS：`onboarding-*` 系列（eyebrow/step-num 圆点/步骤列表），复用 goal-card 视觉语言。
+- **范围守界**：未动 demo-data、service/repo/API、createGoal/表单、availability/planner 流程；未加 seed/新手任务/XP/强制 onboarding/本地存储标记。mobile（mobile-shell.tsx 独立 shell）不在本次范围。
+- **验证**：typecheck 0 错、eslint 0 错、build 通过。视觉验收需浏览器人工：新注册账号（无 goal）→ 计划页见引导卡；有 goal 则不出现。
+
+### 7c Agent 观测 ✅（2026-09-05 交付）
+
+- **实现（4 文件 + 1 e2e，零 schema）**：
+  - `lib/repo/agent-runs.ts` +`listAgentRuns(userId, limit)`：显式选列 `id/agent_type/prompt_version/latency_ms/success/created_at`，**刻意不含 input_context/output_json/error_message**（隐私与体积口径同 015），user_id 隔离 + created_at desc。
+  - `lib/service/agent-runs.ts`（新）：`listAgentRunsForUser(userId, limit?)`，clamp 1-50 默认 20。
+  - `app/api/agent-runs/route.ts`（新）：GET + authenticate，`?limit=`，返回 `{ success, runs }`。
+  - `app/page.tsx` + `globals.css`：GrowthPanel 有数据分支底部 `<details className="agent-runs-panel">` **默认收起**「AI 运行记录」——每行 `[类型] 版本 · 成功/失败 · latency · MM-DD HH:mm`；数据拉取挂 App 根：`agentRuns` state + effect（ready 且 `activeTab==="成长"` 每次切入刷新；null=未加载 → 折叠区不渲染）。demo 模式不 fetch（growthStats 空态早退），无污染。
+- **验证**：typecheck/eslint/build 全过；新增 `scripts/agent-runs-http-e2e.mjs` **10/10**（A 未登录 401 / B 空列表 shape / C 白名单字段无明文泄漏 / D 用户隔离 / E 非空+倒序）。
+- **范围守界**：不做 Trace 后台、成功率统计、分页、input/output 明文展示。mobile 独立 shell 不在范围。
+
 ### 7b/7c/7d 状态
-- 7b 首次体验引导：⬜ 待实现
-- 7c Agent 观测：⬜ 待实现
-- 7d README 重写：⬜ 待实现
+- 7b 首次体验引导：✅ 已实现（见上）
+- 7c Agent 观测：✅ 已实现（见上）
+- 7d README 重写：⬜ 待实现（最后一项）

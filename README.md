@@ -1,263 +1,229 @@
 # 成长回路（Growth Loop）
 
-一个把“今天做了什么”变成下一步行动的自我提升 Agent。用户可以直接和 AI 对话，记录学习、运动、生活和休息；Agent 负责整理、安排、复盘，并把可验证的行动记入成长轨迹。
+把「今天做了什么」变成下一步行动的自我提升 Agent。用户用一句话告诉 AI 今天的学习、运动、生活与休息；Agent 负责理解、出行动路线、排进日程、复盘反馈，并把每一次可验证的行动沉淀成成长轨迹——形成一个 **Goal → Action → Schedule → Execution → Review → Reflection** 的完整回路（Smart Planner v1）。
 
-> 当前版本是可运行的本地原型，不是生产 SaaS。项目已经包含 Next.js Web、Capacitor Android 工程、确定性 demo 数据、OpenAI-compatible LLM 接口、微信公众号明文回调、理解测验和电脑 Android Emulator 调试链路。
+> 当前为单机可部署的 MVP：Next.js Web + 标准 PostgreSQL + OpenAI-compatible LLM（可无 Key 运行，规则回退保证全流程可用）。Docker Compose 一键起服务。Android 壳与微信公众号属于仓库内的实验模块，不是主链路。
 
-## 现在能做什么
+## 核心能力
 
 | 能力 | 当前实现 | 入口 |
 |---|---|---|
-| 账号与持久化 | 邮箱/密码注册登录、目标/任务/记录/账本 PostgreSQL 持久化、多用户隔离、幂等入账 | `/api/auth/*`、`/api/tasks` |
-| 计划地图 | 目标/任务真实 CRUD（派生进度、防重复、删除语义、移动端查看+完成） | `/api/goals`、`/api/tasks` |
-| AI 今日对话 | 记录事实、识别意图、给出下一步；无模型配置时使用规则回退 | `/api/agent`、首页 |
-| 学习闭环 | 学习记录 → 生成 2–3 道理解题 → LLM 或规则评分 → XP 回写 | `/api/quiz`、记录页 |
-| 今日行动 | 计划、待办、学习/运动/生活/休息分类、XP 与积分结算 | `/api/demo`、首页/计划 |
-| 晚间回顾 | Agent Context（目标/任务/记录/7 天统计）→ 结构化晚报（达成/阻碍/建议/评价）；21:30 服务端自动调度（`REPORT_TIME` 可配置） | `/api/evening-report`、首页晚报卡 |
-| 微信入口 | 微信公众号首次验证、明文 XML 文本回调、签名校验、LLM 超时回退 | `/api/wechat` |
-| Android App | 独立移动壳 v4；首页一屏 AI 会面，不堆功能、不产生首页纵向滚动 | `android/`、APK |
-| 可复现调试 | doctor、build、install、run、smoke、logs；面向人和 AI | `scripts/debug-apk.ps1` |
+| 账号与持久化 | 邮箱/密码（bcrypt）+ JWT 会话（7 天）；数据层为**标准 PostgreSQL**，RLS 全开 + 服务端连接；注册可选播种演示数据 | `/api/auth/*` |
+| 目标（Goal） | 真实 CRUD：目标 → 进度派生、防重复、删除语义 | `/api/goals`、计划页 |
+| 行动路线（Action） | 手动添加或 **AI 一键分解**目标 → 可执行行动；带步骤校验与图可达性检查 | `/api/actions`、`/api/chat` |
+| AI 对话 | 实时对话 + 三层记忆 + 意图识别；客户端幂等（`client_msg_id`）+ 限流；**LLM 缺失时规则回退** | `/api/chat`、`/api/agent`、今日页 |
+| Smart Planner 排程 | 可用时间（Availability）→ **零落库预览** → 确认 → 排进今日时间轴；每次参考近期反思与当日执行情况校准 | `/api/availability`、`/api/schedules` |
+| 执行打卡 | 按排程执行并记录实际时长/备注；懒计算是否逾期 | `/api/executions` |
+| 记录与账本 | 学习/运动/生活/休息记录（mood/remark）→ XP/Coin 幂等结算（DB 唯一约束 + `ON CONFLICT`） | `/api/records`、`/api/tasks` |
+| 晚间复盘 | Agent Context（目标/任务/记录/7 天统计/当日执行）→ 结构化晚报（达成/阻碍/建议/评分）；本地懒触发 + 生产 Cron 入口 | `/api/evening-report`、首页晚报卡 |
+| 周报与成长仪表盘 | Weekly 双轨统计（计划 vs 实际 + 达成率）；成长页 7 天趋势/复盘/反馈/AI 运行记录 | `/api/weekly`、`/api/growth`、成长页 |
+| 反思反馈（Reflection） | 目标级快捷反馈（认可/有压力）+ 历史列表；**作为参考注入下一次 Planner** | `/api/reflections`、计划页 |
+| Agent 可观测（Trace） | 每次 LLM 调用记录类型/版本/耗时/成败，只读摘要，**不含明文输入输出** | `/api/agent-runs`、成长页折叠 |
+| 理解测验 | 学习记录 → 生成 2–3 题 → LLM 或规则评分 → XP 回写 | `/api/quiz` |
+| 首次体验引导 | 新账号（无目标）在计划页看到三步引导卡：建目标 → AI 行动路线 → 排进每天 | 计划页空态 |
+| 部署 | Docker Compose（app + PostgreSQL 16）+ `db:setup` 幂等迁移 001–015 + env 预检 | `Dockerfile`、`docker-compose.yml` |
 
-## 产品形态
+## Agent 闭环
 
-首页只做一件事：让用户马上告诉 AI 今天发生了什么。首页默认只显示 AI 状态、一个下一步行动、一个记录框和晚报状态；路线、记录、成长和完整测验放在二级入口，由 AI 在需要时引导用户进入。
+一次完整的「回路」长这样：
+
+```mermaid
+flowchart TD
+  U[用户一句话记录/对话] --> A[Agent 理解]
+  A --> G[Goal 目标]
+  G -->|AI 分解| AC[Action 行动池]
+  AC -->|Planner 参考可用时间+近期反思| PV[Preview 预览 零落库]
+  PV -->|Accept| SC[Schedule 今日时间轴]
+  SC --> EX[Execution 执行打卡 实际时长]
+  EX --> ST[Stats 双轨: 计划 vs 实际]
+  ST --> W[晚间复盘 21:30]
+  ST --> K[Weekly 周报 + 达成率]
+  G -.目标页随时反馈.-> R[Reflection 认可/有压力]
+  R -. 作为参考注入下一轮 Planner .-> A
+```
+
+设计要点（对应各阶段设计文档，见文末文档地图）：
+
+- **排程不等于完成**：Schedule 完成不自动推进 Action/Goal；只有 Execution 打卡才入账、才推动成长。
+- **Execution 自动生成**（`schedule_id` 唯一），实际时长可改；overdue 一律懒计算。
+- **Preview 零落库**：Planner 预览确认前不写任何数据，Accept 才落 Schedule。
+- **数据层隔离**：Repo 层所有 SQL 显式带 `user_id`；Service 只处理已通过 JWT 校验的用户身份。
+
+## 技术栈
+
+| 层 | 选型 |
+|---|---|
+| Web 框架 | Next.js 16.3（App Router）+ React 19.2 + TypeScript strict |
+| 数据层 | PostgreSQL（标准 SQL，不依赖任何 Supabase 专有能力）+ `pg` 驱动 + 参数化查询 |
+| 鉴权 | bcryptjs 密码哈希 + jose JWT（`JWT_SECRET` 签发，7 天有效） |
+| LLM 接入 | OpenAI-compatible `/chat/completions`；支持 `demo / openai / deepseek / glm`，可缺省（规则回退） |
+| 规则内核 | `lib/agent/core/pure.ts` 确定性规则（离线可测） |
+| 部署 | Docker multi-stage（node:22-alpine）+ Compose（postgres:16-alpine） |
+| 移动壳（实验） | Capacitor 8 Android（指向远程 Next 服务） |
+
+架构分层（自上而下单向依赖）：
 
 ```mermaid
 flowchart LR
-  User[用户] --> Home[今日首页 / 微信对话]
-  Home --> Agent[/api/agent]
-  Agent --> Parse[规则解析与会话状态]
-  Agent --> Model[可选 OpenAI-compatible LLM]
-  Home --> Quiz[/api/quiz]
-  Quiz --> Model
-  WeChat[微信公众号] --> WechatAPI[/api/wechat]
-  WechatAPI --> Agent
-  Home --> Demo[/api/demo]
-  Demo --> Seed[确定性 demo 数据]
+  subgraph C[客户端]
+    Web[Web App]
+    Android[Android 壳 实验]
+  end
+  C -->|HTTPS/JSON + Bearer JWT| API[API Routes app/api]
+  API --> AUTH[JWT 校验中间层]
+  AUTH --> SV[Service 层 lib/service<br/>业务与权限, 只收已验证 userId]
+  SV --> RP[Repo 层 lib/repo<br/>参数化 SQL, 全部带 user_id]
+  RP --> PG[(PostgreSQL)]
+  API -.可选.-> LLM[OpenAI-compatible LLM<br/>缺失时规则回退 lib/agent/core/pure.ts]
 ```
+
+迁移到云托管 PostgreSQL（如腾讯云）只需更换 `DATABASE_URL`，业务代码零改动。
 
 ## 快速开始
 
-### 环境要求
+环境要求：Node.js 22+、npm；Docker 部署需要 Docker（含 Compose 插件）。
 
-- Node.js 22 或更高版本（Android WebView CDP smoke 需要 Node 22 的 `WebSocket` 全局对象）
-- npm
-- Windows PowerShell（Android 电脑模拟器脚本按 Windows 环境编写）
-- Android 调试需要本机 Android SDK、AVD 和 Java 21；详见 [Android 构建说明](docs/ANDROID_BUILD.md)
+### 方式 A：本地 demo（无需数据库，最快看效果）
 
-### 本地 Web
-
-```powershell
-git clone https://github.com/redmaplewww/growth-loop-agent.git
-Set-Location growth-loop-agent
-npm.cmd install
-Copy-Item -LiteralPath .env.example -Destination .env.local
-npm.cmd run dev
+```bash
+git clone https://github.com/kkmmtt0919/growth-loop-agent.git
+cd growth-loop-agent
+npm install
+cp .env.example .env.local
+npm run dev
 ```
 
-打开 [http://127.0.0.1:3000/](http://127.0.0.1:3000/)。默认 `LLM_PROVIDER=demo`，不需要 API Key；页面会加载内置确定性测试数据。生产式本地回归可以使用：
+打开 <http://127.0.0.1:3000>。默认 `LLM_PROVIDER=demo`、未配置 `DATABASE_URL`，页面直接使用内置确定性演示数据与规则回退，**不需要 API Key**。此模式无账号体系、数据不落库。
 
-```powershell
-npm.cmd run build
-npm.cmd run start -- --hostname 127.0.0.1 --port 3000
+生产式本地回归：
+
+```bash
+npm run build
+npm run start -- --hostname 127.0.0.1 --port 3000
 ```
 
-### 启用数据库与账号（可选，推荐）
+### 方式 B：本地完整模式（邮箱/密码 + PostgreSQL 持久化）
 
-不配置数据库时，页面使用 demo 数据与浏览器本地存储（原型模式）。要启用**邮箱/密码登录 + 真实持久化**，在 `.env.local` 配置两项：
+1. 准备一个 PostgreSQL（本地 Docker、Supabase 或腾讯云均可）。
+2. `.env.local` 填入 `DATABASE_URL` 与 `JWT_SECRET`（生成：`node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`）。
+3. 应用数据库迁移（幂等，可重复执行）：
 
-```dotenv
-DATABASE_URL=postgresql://user:password@host:port/database
-JWT_SECRET=<长随机字符串，用 node -e "console.log(require('crypto').randomBytes(48).toString('hex'))" 生成>
+```bash
+npm run db:setup        # 读取 .env.local 的 DATABASE_URL，按文件名顺序应用 supabase/migrations/*.sql
+npm run db:check        # 连接诊断
 ```
 
-然后在目标 PostgreSQL（Supabase SQL Editor 或 psql）依次执行 [supabase/migrations/001_init.sql](supabase/migrations/001_init.sql) 与 [002_add_task_version.sql](supabase/migrations/002_add_task_version.sql)。数据库采用标准 PostgreSQL，迁移腾讯云只需更换 `DATABASE_URL`。连接诊断与迁移执行见 `scripts/db-check.mjs`、`scripts/run-migration.mjs`。
+4. 启动并注册账号体验：注册默认播种一套演示目标/任务（`ENABLE_DEMO_SEED=false` 可关闭，见下）。
 
-网页必须通过 Next.js 服务访问，不能直接双击 HTML 或部署到纯静态托管。第一次在另一台电脑配置服务，请先看 [网页服务配置手册](docs/WEB_SERVICE_SETUP.md)。
+### 方式 C：Docker Compose 一键（app + PostgreSQL）
 
-### 检查项目
-
-```powershell
-npm.cmd run typecheck
-npm.cmd run lint
-npm.cmd run build
+```bash
+cp .env.example .env    # 不填 DATABASE_URL 也行：compose 默认连内置 db
+docker compose up -d --build
+docker compose exec app npm run db:setup   # 显式应用迁移（不自动执行，避免生产误启改库）
 ```
 
-## 配置 LLM
+打开 <http://localhost:3000>。`db` 服务映射本机 `5432`；如需连接内置库，宿主侧用 `postgresql://gl:gl_dev_pw@127.0.0.1:5432/growth_loop`。
 
-服务端通过 OpenAI-compatible `/chat/completions` 调用模型。没有完整配置时，Agent 和测验会自动回退到本地规则，不会因为模型不可用阻塞页面或微信文本回复。
+**生产切换**：把 `.env` 的 `DATABASE_URL` 指向外部托管 PG，并注释掉 `docker-compose.yml` 里的 `db` 服务与其 `depends_on`（见文件头注释）。
 
-复制 `.env.example` 为 `.env.local` 后，按实际供应商填写以下变量：
+## 环境变量
 
-```dotenv
-LLM_PROVIDER=demo
-LLM_BASE_URL=
-LLM_API_KEY=
-LLM_MODEL=
+模板见 [.env.example](.env.example)，部署前可跑 `node scripts/check-env.mjs prod` 预检。
+
+| 变量 | Demo | 生产 | 说明 |
+|---|---|---|---|
+| `DATABASE_URL` | 留空 = demo 模式 | **必填** | PostgreSQL 连接串；Docker 场景由 compose 覆盖为内置库 |
+| `JWT_SECRET` | 有 DB 时必填 | **必填** | 长随机串，签名会话 |
+| `CRON_SECRET` | 可选 | **必填** | 外部 Cron/SCF 调 `POST /api/evening-report` 的系统凭据 |
+| `LLM_PROVIDER` | `demo` | `openai`/`deepseek`/`glm` | 见下 |
+| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | 可空 | 建议填 | 通用 OpenAI-compatible 参数 |
+| `DEEPSEEK_*`/`OPENAI_*`/`GLM_*` | 可空 | 可选 | 按 provider 读取对应变量 |
+| `REPORT_TIME` | 可空 | 可空 | 晚报生成时刻 `HH:MM`，默认 `21:30`（上海时区） |
+| `ENABLE_DEMO_SEED` | `true` | `false` | 注册时是否播种演示数据；生产关掉让新用户从空开始走引导 |
+| `WECHAT_APP_ID/SECRET/TOKEN/ENCODING_AES_KEY` | 留空 | 可选 | 微信公众号实验模块专用 |
+
+> 不配置 LLM 时，对话/排程/复盘/出题全部走**规则回退**，功能不阻塞，仅回答质量降级；`GET /api/agent` 返回非敏感配置状态。
+
+## 数据库迁移
+
+- 全部迁移：`supabase/migrations/001_init.sql … 015_agent_runs.sql`（15 个，均为标准 PostgreSQL）。
+- 一键应用：`npm run db:setup` —— 扫描目录按文件名顺序执行，用 `schema_migrations` 表记录已应用文件，**幂等可重跑**（跳过已应用）；每个文件包在单事务里，失败即回滚该文件不影响其他。
+- 连接诊断：`npm run db:check`。
+- 历史单文件工具：`scripts/run-migration.mjs`（可指定单个迁移文件）。
+
+## 验证命令
+
+```bash
+npm run typecheck   # TS strict 全量检查
+npm run lint        # ESLint
+npm run build       # Next 生产构建
+npm run eval        # Agent 离线评测：69/69 确定性规则（目标分解/排程/周报/理解/晚报）
+npm run env:check   # env 预检（dev/prod）
 ```
 
-也支持按 provider 读取对应变量，例如 `DEEPSEEK_BASE_URL`、`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`，以及 `OPENAI_*`、`GLM_*`。密钥只放在本机环境变量、部署平台 Secret 或受管配置工具中，不能提交到 GitHub。
+`npm run eval` 覆盖 `lib/agent/core/pure.ts` 的确定性判定：行动步骤校验、图可达性、排程环检测、deadline-aware、周报字段对齐等——**不依赖 LLM，任何一次改动后都能快速回归**。服务端链路冒烟/端到端脚本集中在 [scripts/](scripts/)（`*-smoke.ts`、`*-http-e2e.mjs`、`e2e-*.sh`），浏览器验收主路径见 [docs/DEVELOPER_HANDBOOK.md](docs/DEVELOPER_HANDBOOK.md)。
 
-服务状态：
+## Demo / 使用流程
 
-```powershell
-Invoke-RestMethod http://127.0.0.1:3000/api/agent
-```
+**演示模式**（无 `DATABASE_URL`）：打开首页即见内置演示数据，可体验 AI 对话与今日/计划/记录各页面（无账号、数据不落库）。要体验完整的「排程→打卡→复盘→反馈」闭环，请进入完整模式。
 
-返回值只包含模式、供应商和是否配置 endpoint/model 等非敏感状态，不返回 API Key。
+**完整模式**（登录后）建议按此顺序体验一次「回路」：
 
-## API 速查
+1. **注册登录** → 创建第一个目标（无目标时计划页出现三步引导卡）。
+2. 在目标详情点 **AI 制定行动路线**（或手动添加行动）。
+3. 设置每周可用时间（Availability）。
+4. 生成 **Planner 预览**（不落库）→ 确认后排进今日时间轴。
+5. 按时间轴**执行打卡**（可填实际时长/备注）。
+6. 目标页给 **AI 反馈**（认可/有压力/一句话）——下次排程会参考。
+7. 21:30 自动生成**晚间晚报**；周日在成长页看 **Weekly 双轨周报**与 7 天趋势。
+8. 成长页底部展开 **AI 运行记录**：查看每次 Agent 调用的类型/版本/耗时/成败。
 
-### 注册与登录（数据库模式）
+## 实验模块
 
-```powershell
-$registerBody = @{ email = 'you@example.com'; password = 'your-password-8+'; displayName = '你的昵称' } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3000/api/auth/register -ContentType 'application/json' -Body $registerBody
-
-$loginBody = @{ email = 'you@example.com'; password = 'your-password-8+' } | ConvertTo-Json
-$login = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3000/api/auth/login -ContentType 'application/json' -Body $loginBody
-$token = $login.token
-```
-
-`POST /api/auth/register` 与 `POST /api/auth/login` 返回 `{ token, profile }`；`GET /api/auth/me`（带 `Authorization: Bearer <token>`）校验会话。注册后自动播种 demo 目标/任务/记录/账本。
-
-### 任务切换（数据库模式）
-
-```powershell
-Invoke-RestMethod `
-  -Method Patch `
-  -Uri http://127.0.0.1:3000/api/tasks `
-  -Headers @{ Authorization = "Bearer $token" } `
-  -ContentType 'application/json' `
-  -Body (@{ taskId = '<task-uuid>'; done = $true } | ConvertTo-Json)
-```
-
-`PATCH /api/tasks` 在数据库事务内切换任务状态并幂等结算/冲正 XP 与积分。数据库模式下，`/api/demo`、`/api/agent`、`/api/quiz` 均需携带 `Authorization: Bearer <token>` 请求头。
-
-### Agent 对话
-
-```powershell
-$body = @{
-  message = '今天学习了 Agent 的工具调用，终于理解它和普通聊天的区别'
-  conversationId = 'demo-user'
-  context = '当前路线：学习 Agent 并开发自己的 Agent'
-} | ConvertTo-Json
-
-Invoke-RestMethod `
-  -Method Post `
-  -Uri http://127.0.0.1:3000/api/agent `
-  -ContentType 'application/json' `
-  -Body $body
-```
-
-`POST /api/agent` 接收 `message`（必填）、`conversationId`、`output`、`context`。返回 `reply`、`intent`、`extracted`、`mode`、`provider` 和 `replySource`。`GET /api/agent` 返回当前非敏感配置状态。
-
-### 理解测验
-
-生成题目：
-
-```powershell
-$body = @{
-  action = 'generate'
-  topic = 'Agent 工具调用'
-  content = 'Agent 会先理解目标，再选择工具并根据结果继续行动。'
-  output = '我理解了工具调用是让模型连接外部能力的桥梁。'
-} | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3000/api/quiz -ContentType 'application/json' -Body $body
-```
-
-评分时提交 `action=grade`、原题目、学习底稿和 `answers`。如果模型已配置，返回 `gradedBy=llm`；否则返回 `gradedBy=rules`，并明确给出回看建议。
-
-### Demo 数据
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:3000/api/demo
-```
-
-该接口提供目标、任务、记录和账本的确定性 seed，只用于原型验收，不代表真实用户数据层。
-
-## 微信公众号接入
-
-当前实现的是“服务端回调 + 明文文本模式”，不是小程序登录或微信支付。配置步骤：
-
-1. 准备公网 HTTPS 域名和可访问的 Next.js 部署。
-2. 在部署 Secret 中配置 `WECHAT_APP_ID`、`WECHAT_APP_SECRET`、`WECHAT_TOKEN`。
-3. 微信公众平台服务器地址填写 `https://你的域名/api/wechat`。
-4. 选择明文模式，完成首次 GET 签名验证。
-5. 用文本消息 POST 回归；模型超时会自动使用本地回退话术。
-
-详细签名规则、XML 字段、状态接口和当前边界见 [微信公众号接入说明](docs/WECHAT_INTEGRATION.md)。当前 MVP 未启用安全模式/兼容模式的密文解密，正式上线前必须补齐加密回调、重放保护、限流和生产监控。
-
-## Android APK
-
-当前仓库已包含 Android 工程和 debug APK：
-
-- 工程：[android/](android/)
-- APK：[artifacts/android/growth-loop-debug.apk](artifacts/android/growth-loop-debug.apk)
-- 电脑浏览器：`http://127.0.0.1:3000/`
-- Android Emulator：`http://10.0.2.2:3000/`
-
-启动本地服务后，在项目根目录执行：
-
-```powershell
-npm.cmd run android:debug   # build + sync + Gradle + install + launch
-npm.cmd run android:run     # 使用现有 APK 安装并启动
-npm.cmd run android:status
-npm.cmd run android:stop
-```
-
-面向 AI 的完整调试顺序：
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/debug-apk.ps1 -Action doctor
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/debug-apk.ps1 -Action run -Build
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/debug-apk.ps1 -Action smoke
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/debug-apk.ps1 -Action logs
-```
-
-详见 [Android APK 调试手册](docs/ANDROID_APK_DEBUG_AI.md) 和 [Android 移动端产品设计](docs/ANDROID_MOBILE_PRODUCT_DESIGN.md)。APK 是 debug 签名，并默认从电脑模拟器读取远程 Next.js 服务；正式发布还需要 HTTPS、release keystore、AAB、真机回归和隐私合规。
+- **微信公众号**：服务端明文回调 + 签名校验 + 规则回退，非登录/支付。配置与边界见 [docs/WECHAT_INTEGRATION.md](docs/WECHAT_INTEGRATION.md)。正式对外前需补加密回调、重放保护、限流与审计。
+- **Android 壳**：Capacitor 8，独立移动壳，页面指向远程 Next 服务。构建与调试见 [docs/ANDROID_BUILD.md](docs/ANDROID_BUILD.md)、[docs/ANDROID_APK_DEBUG_AI.md](docs/ANDROID_APK_DEBUG_AI.md)，移动端交互约束见 [docs/ANDROID_MOBILE_PRODUCT_DESIGN.md](docs/ANDROID_MOBILE_PRODUCT_DESIGN.md)。
 
 ## 文档地图
 
 | 文档 | 内容 |
 |---|---|
-| [开发者与 AI 手册](docs/DEVELOPER_HANDBOOK.md) | 从 clone、配置、开发、测试到发布的完整交接手册 |
-| [网页服务配置](docs/WEB_SERVICE_SETUP.md) | 从干净 clone、环境变量到 Web/Node 服务验收；解释静态托管、API 和 Android 地址边界 |
-| [产品设计方案](docs/PRODUCT_DESIGN_V1.md) | 产品目标、用户闭环、Agent、游戏化和微信路线 |
-| [微信公众号接入](docs/WECHAT_INTEGRATION.md) | 微信服务器配置、签名校验和文本回调 |
-| [Android 构建](docs/ANDROID_BUILD.md) | SDK、AVD、Capacitor 和 Android Studio |
-| [Android APK 调试](docs/ANDROID_APK_DEBUG_AI.md) | doctor/build/install/run/smoke/logs 调试链路 |
-| [移动端产品设计](docs/ANDROID_MOBILE_PRODUCT_DESIGN.md) | 一屏 AI 首页、底部导航和移动交互约束 |
-| [.project-to-act](.project-to-act/PROJECT_OVERVIEW.md) | 项目目标、范围、进度、版本和验收证据 |
+| [Smart Planner 总设计](docs/DESIGN_SMART_PLANNER_V1.md) | 产品闭环、Step 1–5 设计（Goal→Action→Planner→Schedule→Execution→Weekly） |
+| [Step 6：Reflection + Trace + Eval](docs/DESIGN_SMART_PLANNER_STEP6.md) | 反思反馈注入、LLM 调用链路追踪、离线评测体系 |
+| [Step 7：部署与可交付性](docs/DESIGN_SMART_PLANNER_STEP7.md) | Docker、首次体验引导、Agent 观测、README 重写 |
+| [开发者与 AI 手册](docs/DEVELOPER_HANDBOOK.md) | clone 到发布的完整交接手册 |
+| [网页服务配置](docs/WEB_SERVICE_SETUP.md) | 干净 clone、环境变量、Web/Node 服务验收与地址边界 |
+| [0.3.0 Roadmap](docs/ROADMAP_0.3.0.md) | MVP 范围与分阶段路线 |
+| 各阶段设计 | [Agent 晚间](docs/DESIGN_PHASE2_3_AGENT_EVENING.md)、[记录](docs/DESIGN_PHASE4_RECORDS.md)、[周报](docs/DESIGN_PHASE5_WEEKLY.md)、[Eval](docs/DESIGN_PHASE6_EVAL.md)、[聊天面板](docs/DESIGN_CHAT_PANEL_V1.md) 等 |
+| 归档 | 过期设计稿已移入 [docs/archive/](docs/archive/) |
 
-## 数据、安全与发布边界
+## 数据、安全与边界
 
-- demo 数据来自 `lib/demo-data.ts`；**配置 `DATABASE_URL` 后启用 PostgreSQL 持久化**（邮箱/密码登录、目标/任务/记录/账本真实入库、多用户隔离、幂等入账），未配置时回退 localStorage 原型；后台定时任务与数据导出链路仍待后续。
-- 架构分层：Next.js API → Service（业务权限校验）→ Repo（pg + 参数化 SQL，查询显式带 user_id）→ PostgreSQL。数据库使用标准 PostgreSQL，不依赖 Supabase 专有能力；迁移腾讯云只需更换 `DATABASE_URL`。
-- 密码使用 bcrypt 哈希，会话使用 JWT（`JWT_SECRET` 签发，7 天有效）。
-- LLM 只负责理解、建议、出题和评分；任务、XP、积分等写操作由受控服务端 + 幂等账本处理。
-- 不要提交 `.env.local`、API Key、微信 Token、`android/local.properties`、Android build 目录、模拟器镜像或本机 SDK 路径。
-- 微信回调当前只支持明文文本；不要在未补齐加密、重放保护、限流和审计前接收生产敏感消息。
-- 仓库目前没有单独的开源许可证文件；如需对外允许复用，请先补充许可证和第三方依赖声明。
+- **无数据库 = demo 原型**；配置 `DATABASE_URL` 才启用真实持久化与账号。
+- 四层架构：API Route → Service（业务/权限）→ Repo（`pg` + 参数化 SQL，显式 `user_id`）→ 标准 PostgreSQL。**不依赖 Supabase 专有能力**，云迁移只换 `DATABASE_URL`。
+- 密码 bcrypt 哈希；会话 JWT 7 天有效；RLS 在 public 表全开、零策略（服务端连接直通，属 MVP 过渡形态）。
+- 任务/XP/Coin 等写操作由受控服务端 + 幂等账本完成（`idempotency_key` 唯一约束 + `INSERT … ON CONFLICT`）；LLM 永不直接写库。
+- 微信回调仅支持明文文本；Android APK 为 debug 签名；两者正式发布前需补齐加密/签名/合规（详见各自文档）。
+- 不要提交 `.env.local`、`.env`、API Key、`android/local.properties`、构建产物与密钥。
 
 ## 常见问题
 
 | 现象 | 处理 |
 |---|---|
-| 电脑能打开，APK 打不开 | 确认 Next 服务监听 `127.0.0.1:3000`，APK 使用的是 `10.0.2.2:3000`；先跑 `doctor` |
-| 页面显示旧版本 | 重启 `next start` 或重新执行 `npm.cmd run dev`，再重新打开 APK；当前 APK 默认加载远程页面 |
-| `smoke` 找不到页面 | 确认应用已启动、ADB 设备为 `device`，然后重新执行 `run` 再 `smoke` |
-| LLM 没有返回 | 查看 `/api/agent` 状态和环境变量；没有完整配置时预期会走 demo/rules 回退 |
-| 微信首次验证失败 | 检查公网 HTTPS、`WECHAT_TOKEN`、服务器 URL 和服务器时间；不要把 token 写进源码 |
-| Android ADB `offline` | `npm.cmd run android:stop` 后重新 `npm.cmd run android:debug`，必要时重启 adb server |
+| 页面能开但登录不可用 | 缺 `DATABASE_URL`/`JWT_SECRET`；demo 模式无账号体系属预期 |
+| 打开页面只有内置演示数据 | 同上，属 demo 模式；配好 DB 并 `db:setup` 后重启即切换 |
+| 新建账号就有目标 | 注册播种所致：`.env.local` 设 `ENABLE_DEMO_SEED=false` |
+| 对话只有规则回复 | LLM 未配置或 Key 无效：`GET /api/agent` 看状态，属降级预期 |
+| `docker compose up` 后 3000 被占 | 本机已有服务占用 3000；停掉后重试或改 compose 端口映射 |
+| 内置 db 起不来/端口 5432 冲突 | 本机已有 PG 占用 5432；改用外部 `DATABASE_URL` 并注释 db 服务 |
 
 ## 贡献与提交
 
-1. 从 `main` 创建短分支，修改前先阅读 `AGENTS.md` 和相关 `.project-to-act` 文档。
-2. 只提交本次任务范围内的文件，避免把密钥、构建产物和模拟器缓存带入提交。
-3. 至少运行 `typecheck`、`lint`、`build`；涉及 Android 时再运行 `android:debug`、`doctor`、`smoke`、`logs`。
-4. 提交信息说明意图，PR 描述列出变更、验证命令和已知边界。
+1. 从 `main` 创建短分支；改动前阅读 `AGENTS.md`（Next.js 16.3 有破坏性变更）与相关设计文档。
+2. 只提交本次任务范围内的文件；密钥/构建产物/模拟器缓存一律排除。
+3. 至少通过 `typecheck`、`lint`、`build`、`eval`；改动涉及链路时补跑对应 `scripts/*-smoke.ts` 或 `*-http-e2e.mjs`。
+4. 提交信息说明意图；大改动按功能拆多个 commit 便于回滚。
 
-## 当前版本
+## 当前状态
 
-`0.2.0-prototype` · 邮箱/密码登录与 PostgreSQL 持久化数据层已落地（端到端验证通过）· Android 移动壳 v4 · public GitHub 源码与 debug APK 已交付。后台 21:30 调度、微信登录/加密模式、release 签名、腾讯云 PG 迁移和真实用户验收属于后续版本范围。
+Smart Planner Step 1–7 已实现（Agent 闭环 + 反思注入 + Trace + Eval 69/69 + Docker 部署 + 首次体验引导 + 观测页），正处于 Step 7 收尾与 release review 阶段。数据库迁移总数 15；版本标签随 release review 定版。
